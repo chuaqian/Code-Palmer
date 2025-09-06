@@ -32,7 +32,7 @@ Additionally, the sample project contains Makefile and component.mk files, used 
 They are not used or needed when building with CMake and idf.py.
 
 Create settings.json file with this format (Replace XXX with your path e.g. ljung)
-settings.json to copy:
+settings.json to copy into .vscode file:
 {
   "C_Cpp.intelliSenseEngine": "default",
   "idf.espIdfPathWin": "C:\\Users\\XXX\\esp\\v5.5.1\\esp-idf",
