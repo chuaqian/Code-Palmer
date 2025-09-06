@@ -7,6 +7,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
+// ESP-IDF system / MAC address
+#include "esp_system.h"
+#include "esp_mac.h"   // For esp_read_mac (IDF v5+)
+#include "esp_err.h"
 
 #define LED_PIN 2   // Change if your board's LED is on another GPIO
 
@@ -63,6 +67,20 @@ static void play_pattern(const BeatStep *pattern, int length, int repeats) {
   }
 }
 
+// Retrieve and print the ESP32 Wi‑Fi station MAC address.
+// Returns ESP_OK on success, else error code.
+static esp_err_t print_mac_address(void) {
+  uint8_t mac[6];
+  esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA); // Reads base MAC (no Wi-Fi init needed)
+  if (err == ESP_OK) {
+    printf("ESP32 STA MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  } else {
+    printf("Failed to read MAC address (err=%d)\n", err);
+  }
+  return err;
+}
+
 void app_main(void) {
   gpio_config_t io_conf = {
     .pin_bit_mask = 1ULL << LED_PIN,
@@ -80,6 +98,9 @@ void app_main(void) {
     gpio_set_level(LED_PIN, 0);
     vTaskDelay(pdMS_TO_TICKS((int)(0.7f * QUARTER_MS)));
   }
+
+  // Print MAC address once at startup (appears in serial monitor)
+  print_mac_address();
 
   // Loop chorus pattern indefinitely
   while (1) {
