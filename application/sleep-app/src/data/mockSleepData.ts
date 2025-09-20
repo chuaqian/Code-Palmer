@@ -310,3 +310,20 @@ export function getSeptemberMock() {
   // return a copy so consumers can modify without mutating original constant
   return [...SEPTEMBER_2025_MOCK];
 }
+
+// Hourly disturbances dataset for a single night (developer-editable)
+export const SEPTEMBER_2025_DISTURBANCES = [
+  { Time: "11:00 PM", "Sleep Stage": "Light", "Snore Count": 11, "Disturbance Risk": "Medium" },
+  { Time: "12:00 AM", "Sleep Stage": "Awake", "Snore Count": 5, "Disturbance Risk": "Low" },
+  { Time: "01:00 AM", "Sleep Stage": "REM", "Snore Count": 36, "Disturbance Risk": "High" },
+  { Time: "02:00 AM", "Sleep Stage": "Deep", "Snore Count": 2, "Disturbance Risk": "Low" },
+  { Time: "03:00 AM", "Sleep Stage": "Light", "Snore Count": 8, "Disturbance Risk": "Medium" },
+  { Time: "04:00 AM", "Sleep Stage": "Light", "Snore Count": 5, "Disturbance Risk": "Low" },
+  { Time: "05:00 AM", "Sleep Stage": "Light", "Snore Count": 8, "Disturbance Risk": "Medium" },
+  { Time: "06:00 AM", "Sleep Stage": "Light", "Snore Count": 9, "Disturbance Risk": "Medium" },
+  { Time: "07:00 AM", "Sleep Stage": "REM", "Snore Count": 8, "Disturbance Risk": "Medium" },
+];
+
+export function getSeptemberDisturbances() {
+  return [...SEPTEMBER_2025_DISTURBANCES];
+}

@@ -26,10 +26,17 @@ export default function SleepStagesTimelineChart({
   bedtime,
   waketime,
   durationHours,
+  disturbances,
 }: {
   bedtime: string; // "HH:mm"
   waketime: string; // "HH:mm"
   durationHours: number;
+  disturbances?: Array<{
+    Time: string;
+    "Sleep Stage": string;
+    "Snore Count": number;
+    "Disturbance Risk": string;
+  }>;
 }) {
   const parseHM = (hm: string, base: Date) => {
     const [h, m] = hm.split(":").map((n) => parseInt(n, 10));
@@ -82,6 +89,35 @@ export default function SleepStagesTimelineChart({
     pad + innerH
   } L ${pad} ${pad + innerH} Z`;
 
+  // Map disturbances (hourly snore counts) to x positions and heights
+  const disturbancePoints = useMemo(() => {
+    if (!disturbances || disturbances.length === 0) return [] as any[];
+    const maxSnore = Math.max(...disturbances.map((d) => d["Snore Count"] || 0));
+    const parseTime = (t: string) => {
+      // expected formats like "11:00 PM" or "01:00 AM"
+      const parts = t.trim().split(" ");
+      const time = parts[0];
+      const ampm = parts[1] ? parts[1].toUpperCase() : undefined;
+      const [hhStr, mmStr] = time.split(":");
+      let hh = Number(hhStr) % 12;
+      const mm = Number(mmStr || 0);
+      if (ampm === "PM") hh += 12;
+      return { hh, mm };
+    };
+
+    return disturbances.map((d) => {
+      const { hh, mm } = parseTime(d.Time);
+      const dt = new Date(start);
+      dt.setHours(hh, mm, 0, 0);
+      let diff = dt.getTime() - start.getTime();
+      if (diff < 0) diff += 24 * 60 * 60 * 1000; // wrap to next day
+      const perc = Math.max(0, Math.min(1, diff / totalMs));
+      const x = pad + perc * innerW;
+      const h = maxSnore > 0 ? (d["Snore Count"] / maxSnore) * (innerH * 0.6) : 0;
+      return { x, h, raw: d["Snore Count"], risk: d["Disturbance Risk"], time: d.Time };
+    });
+  }, [disturbances, start, totalMs, pad, innerW, innerH]);
+
   const remColor = getComputedCssVar("--rem-accent", "#a78bfa");
   const lightColor = getComputedCssVar("--light-accent", "#fbbf24");
   const deepColor = getComputedCssVar("--sleep-gradient-start", "#6b46c1");
@@ -114,6 +150,14 @@ export default function SleepStagesTimelineChart({
   };
 
   const id = useId();
+  const [activeDisturbance, setActiveDisturbance] = useState<null | {
+    x: number;
+    y: number;
+    time: string;
+    stage: string;
+    raw: number;
+    risk: string;
+  }>(null);
 
   return (
     <div className="relative">
@@ -176,6 +220,54 @@ export default function SleepStagesTimelineChart({
           strokeWidth={3}
           strokeLinecap="round"
         />
+        {/* Disturbance bars (snore counts) */}
+        <g>
+          {disturbancePoints.map((dp, i) => (
+            <rect
+              key={i}
+              x={dp.x - 4}
+              y={pad + innerH - dp.h}
+              width={8}
+              height={dp.h}
+              fill={dp.raw >= 15 ? "#ef4444" : "#f59e0b"}
+              opacity={0.95}
+              tabIndex={0}
+              role="button"
+              onMouseEnter={() =>
+                setActiveDisturbance({
+                  x: dp.x,
+                  y: pad + innerH - dp.h,
+                  time: dp.time,
+                  stage: dp.risk ? dp.risk : "",
+                  raw: dp.raw,
+                  risk: dp.risk,
+                })
+              }
+              onMouseLeave={() => setActiveDisturbance(null)}
+              onFocus={() =>
+                setActiveDisturbance({
+                  x: dp.x,
+                  y: pad + innerH - dp.h,
+                  time: dp.time,
+                  stage: dp.risk ? dp.risk : "",
+                  raw: dp.raw,
+                  risk: dp.risk,
+                })
+              }
+              onBlur={() => setActiveDisturbance(null)}
+              onClick={() =>
+                setActiveDisturbance({
+                  x: dp.x,
+                  y: pad + innerH - dp.h,
+                  time: dp.time,
+                  stage: dp.risk ? dp.risk : "",
+                  raw: dp.raw,
+                  risk: dp.risk,
+                })
+              }
+            />
+          ))}
+        </g>
         {hoverIdx != null &&
           (() => {
             const p = points[hoverIdx]!;
@@ -196,6 +288,25 @@ export default function SleepStagesTimelineChart({
             );
           })()}
       </svg>
+      {/* Disturbance tooltip */}
+      {activeDisturbance && (
+        (() => {
+          // clamp tooltip position within chart bounds
+          const left = Math.max(8, Math.min(width - 160, activeDisturbance.x - 80));
+          const top = Math.max(8, Math.min(height - 60, activeDisturbance.y - 40));
+          return (
+            <div
+              className="absolute z-10 rounded-md bg-black/80 text-white text-xs px-3 py-2"
+              style={{ left, top }}
+            >
+              <div className="font-semibold">{activeDisturbance.time}</div>
+              <div className="text-neutral-300 text-[12px]">Stage: {activeDisturbance.stage}</div>
+              <div className="text-[12px]">Snore count: {activeDisturbance.raw}</div>
+              <div className="text-[12px]">Risk: {activeDisturbance.risk}</div>
+            </div>
+          );
+        })()
+      )}
       <div className="mt-1 flex justify-between text-[12px] text-neutral-400">
         {tickDates.map((d, i) => (
           <span key={i}>{formatTime(d)}</span>

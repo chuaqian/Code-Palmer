@@ -20,12 +20,13 @@ import MetricBlock from "@/src/components/dashboard/MetricBlock";
 import { BedIcon, MoonIcon } from "@/src/components/dashboard/icons";
 import SleepStagesTimelineChart from "@/src/components/sleep/SleepStagesTimelineChart";
 import SleepStagesBreakdown from "@/src/components/sleep/SleepStagesBreakdown";
+import BreathingDisturbancesChart from "@/src/components/sleep/BreathingDisturbancesChart";
 import HeaderBar from "@/src/components/dashboard/HeaderBar";
 import TemperatureInsightCard from "@/src/components/environment/TemperatureInsightCard";
 import HumidityInsightCard from "@/src/components/environment/HumidityInsightCard";
 import LightInsightCard from "@/src/components/environment/LightInsightCard";
 import SoundInsightCard from "@/src/components/environment/SoundInsightCard";
-import { getSeptemberMock } from "@/src/data/mockSleepData";
+import { getSeptemberMock, getSeptemberDisturbances } from "@/src/data/mockSleepData";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -602,6 +603,12 @@ export default function Dashboard() {
             {tipsLoading ? "Generating…" : "Get Recommendations"}
           </Button>
         </CardBody>
+      </HCard>
+      {/* Breathing disturbances reflection (Yesterday) */}
+      <HCard>
+      <div className="mt-4">
+        <BreathingDisturbancesChart disturbances={getSeptemberDisturbances()} />
+      </div>
       </HCard>
       {/* Tonight's Conditions Preview */}
       <HCard className="mt-4 bg-glass border-white/10">
