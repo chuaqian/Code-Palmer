@@ -996,3 +996,152 @@ styles/
 **Target Platforms:** iOS, Android (React Native), Web (PWA)
 
 This design ethos creates a sophisticated, calming sleep tracking experience that rivals industry leaders while maintaining unique visual identity through carefully crafted dark themes, meaningful animations, and data-driven beauty.
+
+## 21) Smart Environment Tracking (IoT, real-time; plan-only)
+
+Purpose: Use live IoT sensors to track room conditions in real time (no dependency on manual sleep logs) and surface actionable insights with live charts.
+
+IoT Data Sources (MVP)
+
+- Sensors (Sleep Pebble prototype):
+  - DHT11 → temperature (°C), humidity (%RH)
+  - Photoresistor/Light sensor → raw ADC + derived voltage; map to lux + categorical level
+  - HW-496 sound sensor → digital (LOW/HIGH) + categorical level; optional analog dBA approximation
+- Stream: All metrics stream live at 1–2 Hz (configurable) over a local gateway to the app in real time.
+
+Telemetry Mapping (from sample logs)
+
+- Example lines and how we interpret:
+  - "Light Sensor - Raw: 1692, Voltage: 1.45V, Level: DIM" → light: { raw: 1692, voltage: 1.45, level: "DIM", lux: approx(mapRawToLux(1692)) or fallback 5 lux if only categorical }
+  - "HW-496 - Digital: LOW, Level: QUIET" and "🔊 HW-496 SOUND DETECTED: NO" → sound: { digital: "LOW", level: "QUIET", dba: approx(28–35) }
+  - "⚫️ Quiet | Light: DIM | HW-496: Inactive" → status overlay, no numeric changes
+  - "DHT11 - Humidity: 57.4%, Temperature: 26.6°C" → humidity: 57.4, temperature: 26.6
+- Lux mapping:
+  - If voltage/raw available, apply a device-specific calibration curve lux = f(raw|voltage); otherwise map categories: DARK≈0.5, DIM≈5, BRIGHT≈100.
+- dBA mapping:
+  - If only digital LOW/HIGH, derive category-based ranges: QUIET≈30 dBA, MODERATE≈38 dBA, LOUD≈48 dBA (tunable per calibration night).
+
+Metrics
+
+- Temperature (°C), Humidity (%RH), Light (lux), Sound (dBA)
+
+Thresholds & Status Bands
+
+- Temperature: Optimal 18–24°C; Cool 16–18; Warm 24–26; Out-of-range <16 or >26
+- Humidity: Optimal 40–60%; Dry 30–40; Humid 60–70; Out-of-range <30 or >70
+- Light: Optimal <1 lux; Dim 1–10; Bright >10 (use category mapping when lux not available)
+- Sound: Optimal <30 dBA; Moderate 30–40; Loud >40
+
+Data Model (planning)
+
+- Realtime stream buffers kept per metric with ring buffers:
+  - environmentLive: {
+    - temperature: { value: number, ts: string }
+    - humidity: { value: number, ts: string }
+    - light: { lux?: number, raw?: number, voltage?: number, level: 'DARK'|'DIM'|'BRIGHT', ts: string }
+    - sound: { dba?: number, digital?: 'LOW'|'HIGH', level: 'QUIET'|'MODERATE'|'LOUD', ts: string }
+      }
+  - environmentSeries?: Array<{ ts: string; temperature?: number; humidity?: number; lightLux?: number; soundDb?: number }>
+  - environmentSummary?: same as before (avg/min/max/timeInOptimalMins) computed per session
+- Sessions (per night): envSession { id, deviceId, startTs, endTs?, seriesRef }
+- Storage: use IndexedDB for series (large), keep summaries in localStorage/Zustand for fast boot; migrate when implementing.
+
+UI/UX (Dashboard)
+
+- Section title: “Smart Environment Tracking — LIVE”.
+- 2×2 grid of metric cards (mobile: two columns) with:
+  - Live value + unit (updates at 1–2 Hz)
+  - Status badge (Optimal / Dry / Humid / Dim / Bright / Quiet / Loud)
+  - Live sparkline (rolling window, e.g., last 5–15 minutes)
+  - Thin gauge/progress band with optimal range shading
+- Detail modal on tap:
+  - Full-width live timeline with threshold bands; scrub shows historic tooltips; “Pause/Resume live” control
+  - Summary stats for current session (avg/min/max + time in optimal)
+  - Context tip based on status
+- Connection affordances: device name, signal/battery, Connected/Retry CTA; “Start Night / End Night” session controls.
+
+Charts (real-time)
+
+- Card sparkline: lightweight SVG line with decimation and smoothing; append new points on tick.
+- Detail: line/area per metric with shaded threshold bands; X=time, Y=units; retain 5–15 min live window by default, allow expand to whole night.
+- Current indicators: thermometer bar (temp), radial gauge (humidity), gradient lux bar (light), level meter (sound).
+
+Interactions
+
+- Live tooltip showing ts, value, status; “Pause live” when scrubbing.
+- Toggle threshold bands; long-press to pin threshold info.
+- Auto-reconnect on stream drop; offline buffer until connection resumes.
+
+Accessibility
+
+- ARIA labels for live regions (aria-live="polite"), clear text labels for color states.
+- “Show as table” for last N minutes with timestamped values.
+- Respect reduced motion; limit real-time animations.
+
+Performance
+
+- Stream cadence 1–2 Hz; render at ≤10 FPS for charts (coalesce ticks) to save battery.
+- Use Web Worker for parsing/decimation (plan); memoize series; lazy-mount on intersection.
+- Backpressure: drop intermediate points when offscreen; keep summaries accurate.
+
+Trends Integration
+
+- Trends page adds Environment tab: 7-day averages and % time-in-optimal per metric.
+- Compare nights; highlight threshold compliance bands.
+
+Recommendations Tie-in
+
+- If timeInOptimalMins low or frequent out-of-range spikes, prioritize environment tips.
+- Use recent live session summary for prompt context.
+
+Implementation Tasks (revised; plan only)
+
+- Ingestion: WebSocket over local network or MQTT over WebSockets; SSE fallback.
+- Parser: map device log lines to JSON payload; compute lux/dBA via calibration or category mapping.
+- lib/env.ts: thresholds, classifiers, smoothing/decimation, summary reducer.
+- Storage: introduce IndexedDB for time series (idb); keep summaries in store with migration plan.
+- UI: EnvCard, EnvGauge, EnvSparkline, EnvDetailModal with live state; connection banner.
+- Tests: classifier edges; parser correctness on sample logs; decimation stability.
+
+QA Checklist
+
+- Live charts update smoothly with limited CPU; status badges accurate.
+- Reconnect behavior verified; buffered data reconciles after reconnect.
+- Accessibility table view and labels verified in dark mode.
+
+---
+
+## 22) IoT Streaming Architecture (design-forward; plan-only)
+
+Transport Options
+
+- Preferred: WebSocket gateway on LAN exposing JSON frames; browser connects directly.
+- Alternative: MQTT broker with WebSocket support (e.g., Mosquitto/EMQX); topics: sleepsync/pebble/{deviceId}.
+- Fallback: Server-Sent Events (SSE) from a local Node bridge.
+
+Message Schema (JSON)
+
+- { ts: ISO8601, deviceId: string,
+  temperatureC?: number, humidityPct?: number,
+  light?: { raw?: number, voltage?: number, level?: 'DARK'|'DIM'|'BRIGHT', lux?: number },
+  sound?: { digital?: 'LOW'|'HIGH', level?: 'QUIET'|'MODERATE'|'LOUD', dba?: number } }
+
+Calibration & Mapping
+
+- Nightly baseline capture for sound (silence floor) and light (dark baseline) to refine lux/dBA estimates.
+- Store calibration per deviceId; apply when deriving lux/dBA from raw readings.
+
+Sessioning
+
+- Start Night: begin envSession, clear ring buffers, mark startTs.
+- End Night: finalize session, compute environmentSummary, persist series to IndexedDB, trim to quota.
+
+Security
+
+- Local pre-shared token attached as query param/header for WS/MQTT; rotate per build.
+- No PII in telemetry; deviceId is random UUID.
+
+Constraints
+
+- PWA-safe: no native BLE requirement; works over Wi‑Fi LAN.
+- Works offline/local-first; cloud not required for demo.
