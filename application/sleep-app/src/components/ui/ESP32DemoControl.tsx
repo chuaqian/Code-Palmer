@@ -16,7 +16,7 @@ import {
   WifiIcon,
   LinkIcon
 } from '@heroicons/react/24/outline';
-import { esp32Serial, isWebSerialSupported } from '@/lib/esp32-serial';
+import { esp32Controller } from '@/lib/esp32';
 
 interface ESP32DemoControlProps {
   className?: string;
@@ -26,30 +26,23 @@ export default function ESP32DemoControl({ className = '' }: ESP32DemoControlPro
   const [isOpen, setIsOpen] = useState(false);
   const [status, setStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState('');
-  const [isConnected, setIsConnected] = useState(false);
+  const [isConnected, setIsConnected] = useState(true); // Always connected via local agent
   const [isConnecting, setIsConnecting] = useState(false);
 
-  useEffect(() => {
-    setIsConnected(esp32Serial.isConnected());
-  }, []);
+  // No need for useEffect since we're always "connected" via local agent
 
   const connectToESP32 = async () => {
-    if (!isWebSerialSupported()) {
-      setStatus('error');
-      setMessage('Web Serial not supported. Use Chrome/Edge browser.');
-      return;
-    }
-
+    // Test connection by sending a status command
     setIsConnecting(true);
     setStatus('running');
-    setMessage('Click the ESP32 port when prompted...');
+    setMessage('Testing connection to local agent...');
 
     try {
-      const connected = await esp32Serial.connect();
-      if (connected) {
+      const response = await esp32Controller.getStatus();
+      if (response.success) {
         setIsConnected(true);
         setStatus('success');
-        setMessage('ESP32 Connected! 🎉');
+        setMessage('Connected to ESP32 via local agent! 🎉');
         // Clear success message after 3 seconds
         setTimeout(() => {
           setStatus('idle');
@@ -57,7 +50,7 @@ export default function ESP32DemoControl({ className = '' }: ESP32DemoControlPro
         }, 3000);
       } else {
         setStatus('error');
-        setMessage('Failed to connect to ESP32');
+        setMessage('Local agent is not responding. Please check if it\'s running.');
       }
     } catch (error: any) {
       setStatus('error');
@@ -69,8 +62,8 @@ export default function ESP32DemoControl({ className = '' }: ESP32DemoControlPro
   };
 
   const disconnectESP32 = async () => {
-    await esp32Serial.disconnect();
-    setIsConnected(false);
+    // For local agent, we don't really "disconnect"
+    setIsConnected(true); // Keep as connected since local agent handles it
     setStatus('idle');
     setMessage('');
   };
@@ -90,41 +83,41 @@ export default function ESP32DemoControl({ className = '' }: ESP32DemoControlPro
     setMessage(`Running: ${description}...`);
 
     try {
-      let success = false;
+      let response;
       
       switch (command) {
         case 'FAST_SUNRISE':
-          success = await esp32Serial.triggerSunrise();
+          response = await esp32Controller.fastSunrise();
           break;
         case 'TRIGGER_SUNSET':
-          success = await esp32Serial.triggerSunset();
+          response = await esp32Controller.triggerSunset();
           break;
         case 'RED_AMBIENT':
-          success = await esp32Serial.redAmbient();
+          response = await esp32Controller.setRedAmbient();
           break;
         case 'BLUE_CALM':
-          success = await esp32Serial.blueCalm();
+          response = await esp32Controller.setBlueCalm();
           break;
         case 'BUZZER_TEST':
-          success = await esp32Serial.buzzerTest();
+          response = await esp32Controller.testBuzzer();
           break;
         case 'RAINBOW':
-          success = await esp32Serial.rainbow();
+          response = await esp32Controller.startRainbow();
           break;
         case 'NIGHT_LIGHT':
-          success = await esp32Serial.nightLight();
+          response = await esp32Controller.nightLight();
           break;
         case 'TRIGGER_ALARM':
-          success = await esp32Serial.triggerAlarm();
+          response = await esp32Controller.triggerAlarm();
           break;
         case 'STOP_ALARM':
-          success = await esp32Serial.stopAlarm();
+          response = await esp32Controller.stopAlarm();
           break;
         default:
-          success = await esp32Serial.sendCommand(command);
+          response = await esp32Controller.sendCommand(command);
       }
 
-      if (success) {
+      if (response.success) {
         setStatus('success');
         setMessage(`✅ ${description} executed!`);
       } else {
@@ -346,12 +339,9 @@ export default function ESP32DemoControl({ className = '' }: ESP32DemoControlPro
             {/* Footer */}
             <div className="p-3 border-t border-white/10 bg-black/40">
               <div className="text-gray-400 text-xs text-center">
-                {isWebSerialSupported() 
-                  ? (isConnected 
-                    ? `🟢 ESP32 Connected - Ready for demo!`
-                    : '🔵 Click Connect to start demo')
-                  : '⚠️ Web Serial not supported - Use Chrome/Edge'
-                }
+                {isConnected 
+                  ? `🟢 ESP32 Local Agent - Ready for demo!`
+                  : '🔵 Click Connect to test local agent'}
               </div>
             </div>
           </motion.div>

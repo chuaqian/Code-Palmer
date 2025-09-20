@@ -14,7 +14,7 @@ import {
   BoltIcon,
   FireIcon
 } from '@heroicons/react/24/outline';
-import { esp32Serial } from '@/lib/esp32-serial';
+import { esp32Controller } from '@/lib/esp32';
 
 interface DemoControlPanelProps {
   onHaptic: (type: 'light' | 'medium' | 'heavy') => void;
@@ -34,45 +34,44 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
   const [isExecuting, setIsExecuting] = useState<string | null>(null);
   const [lastCommand, setLastCommand] = useState<string>('');
   const [commandStatus, setCommandStatus] = useState<'success' | 'error' | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState('');
-  const [isSupported, setIsSupported] = useState(false);
-  const [isSecure, setIsSecure] = useState(false);
+  const [isConnected, setIsConnected] = useState(true); // Always connected via local agent
+  const [connectionStatus, setConnectionStatus] = useState('Local Agent Ready');
+  const [isSupported, setIsSupported] = useState(true); // Always supported via local agent
+  const [isSecure, setIsSecure] = useState(true); // Not needed for local agent
   const [deviceLog, setDeviceLog] = useState<string[]>([]);
 
   useEffect(() => {
-    // Client-only feature detection
-    if (typeof window !== 'undefined') {
-      setIsSupported('serial' in navigator);
-      setIsSecure((window as any).isSecureContext ?? false);
-    }
-    // Subscribe to device messages
-    const off = esp32Serial.onMessage((line) => {
-      setDeviceLog(prev => (prev.length > 200 ? [...prev.slice(-199), line] : [...prev, line]));
-    });
-    return () => off();
+    // For local agent, we don't need to check browser compatibility
+    setIsSupported(true);
+    setIsSecure(true);
+    setIsConnected(true);
+    setConnectionStatus('Local Agent Ready');
   }, []);
 
   const connectToESP32 = async () => {
     onHaptic('medium');
-    setConnectionStatus('Connecting...');
+    setConnectionStatus('Testing local agent...');
     try {
-      const success = await esp32Serial.connect();
-      if (success) {
+      const result = await esp32Controller.getStatus();
+      if (result.success) {
         setIsConnected(true);
-        setConnectionStatus('✅ Connected to ESP32!');
+        setConnectionStatus('✅ Connected via Local Agent!');
+        setDeviceLog(prev => [...prev, `✅ Local agent connection verified`]);
       } else {
-        setConnectionStatus('❌ Failed to connect');
+        setConnectionStatus('❌ Local agent not responding');
+        setDeviceLog(prev => [...prev, `❌ Local agent error: ${result.error}`]);
       }
     } catch (error: any) {
-      setConnectionStatus(`❌ ${error?.message || 'Failed to connect'}`);
+      setConnectionStatus(`❌ ${error?.message || 'Local agent unavailable'}`);
+      setDeviceLog(prev => [...prev, `❌ Connection error: ${error?.message}`]);
     }
   };
 
   const disconnectFromESP32 = async () => {
-    await esp32Serial.disconnect();
-    setIsConnected(false);
-    setConnectionStatus('Disconnected');
+    // For local agent, we don't really disconnect
+    setIsConnected(true);
+    setConnectionStatus('Local Agent Ready');
+    setDeviceLog(prev => [...prev, `ℹ️ Local agent always available`]);
   };
 
   const executeCommand = async (commandId: string, commandFn: () => Promise<void>) => {
@@ -106,8 +105,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: SunIcon,
       color: 'from-yellow-500 to-orange-500',
       command: async () => {
-        const result = await esp32Serial.triggerSunrise();
+        const result = await esp32Controller.fastSunrise();
         console.log('🌅 Sunrise Demo:', result);
+        setDeviceLog(prev => [...prev, `🌅 Sunrise: ${result.success ? 'Started' : result.error}`]);
       }
     },
     {
@@ -117,8 +117,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: BoltIcon,
       color: 'from-amber-500 to-yellow-500',
       command: async () => {
-        const result = await esp32Serial.sendCommand('FAST_SUNRISE');
+        const result = await esp32Controller.fastSunrise();
         console.log('⚡ Fast Sunrise:', result);
+        setDeviceLog(prev => [...prev, `⚡ Fast Sunrise: ${result.success ? 'Started' : result.error}`]);
       }
     },
     {
@@ -128,8 +129,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: MoonIcon,
       color: 'from-orange-500 to-red-500',
       command: async () => {
-        const result = await esp32Serial.triggerSunset();
+        const result = await esp32Controller.triggerSunset();
         console.log('🌇 Sunset Demo:', result);
+        setDeviceLog(prev => [...prev, `🌇 Sunset: ${result.success ? 'Started' : result.error}`]);
       }
     },
     {
@@ -139,8 +141,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: LightBulbIcon,
       color: 'from-red-500 to-red-600',
       command: async () => {
-        const result = await esp32Serial.redAmbient();
+        const result = await esp32Controller.setRedAmbient();
         console.log('🔴 Red Ambient:', result);
+        setDeviceLog(prev => [...prev, `🔴 Red Ambient: ${result.success ? 'Activated' : result.error}`]);
       }
     },
     {
@@ -150,8 +153,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: LightBulbIcon,
       color: 'from-blue-500 to-blue-600',
       command: async () => {
-        const result = await esp32Serial.blueCalm();
+        const result = await esp32Controller.setBlueCalm();
         console.log('🔵 Blue Calm:', result);
+        setDeviceLog(prev => [...prev, `🔵 Blue Calm: ${result.success ? 'Activated' : result.error}`]);
       }
     },
     {
@@ -161,8 +165,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: SparklesIcon,
       color: 'from-pink-500 via-purple-500 to-indigo-500',
       command: async () => {
-        const result = await esp32Serial.rainbow();
+        const result = await esp32Controller.startRainbow();
         console.log('🌈 Rainbow Show:', result);
+        setDeviceLog(prev => [...prev, `🌈 Rainbow: ${result.success ? 'Started' : result.error}`]);
       }
     },
     {
@@ -172,8 +177,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: MoonIcon,
       color: 'from-indigo-500 to-purple-500',
       command: async () => {
-        const result = await esp32Serial.nightLight();
+        const result = await esp32Controller.nightLight();
         console.log('🌙 Night Light:', result);
+        setDeviceLog(prev => [...prev, `🌙 Night Light: ${result.success ? 'Activated' : result.error}`]);
       }
     },
     {
@@ -183,8 +189,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: SpeakerWaveIcon,
       color: 'from-green-500 to-emerald-500',
       command: async () => {
-        const result = await esp32Serial.buzzerTest();
+        const result = await esp32Controller.testBuzzer();
         console.log('🔊 Buzzer Test:', result);
+        setDeviceLog(prev => [...prev, `🔊 Buzzer: ${result.success ? 'Testing' : result.error}`]);
       }
     },
     {
@@ -194,8 +201,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
       icon: FireIcon,
       color: 'from-orange-500 to-red-500',
       command: async () => {
-        const result = await esp32Serial.triggerAlarm();
+        const result = await esp32Controller.triggerAlarm();
         console.log('🚨 Full Alarm:', result);
+        setDeviceLog(prev => [...prev, `🚨 Alarm: ${result.success ? 'Triggered' : result.error}`]);
       }
     }
   ];
@@ -420,8 +428,9 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
                 <motion.button
                   whileTap={{ scale: 0.95 }}
                   onClick={() => executeCommand('stop', async () => {
-                    const result = await esp32Serial.stopAlarm();
+                    const result = await esp32Controller.stopAlarm();
                     console.log('🛑 Emergency Stop:', result);
+                    setDeviceLog(prev => [...prev, `🛑 Stop: ${result.success ? 'All stopped' : result.error}`]);
                   })}
                   disabled={!isConnected}
                   className="w-full p-4 rounded-xl bg-red-600/20 border border-red-500/50 hover:bg-red-600/30 transition-all duration-200 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -442,7 +451,10 @@ export function DemoControlPanel({ onHaptic }: DemoControlPanelProps) {
                         className="px-2 py-1 text-xs rounded bg-slate-700/60 text-slate-300 border border-slate-600 hover:bg-slate-700"
                       >Clear</button>
                       <button
-                        onClick={() => esp32Serial.getStatus()}
+                        onClick={async () => {
+                          const result = await esp32Controller.getStatus();
+                          setDeviceLog(prev => [...prev, `📊 Status: ${result.success ? (result.message || 'OK') : result.error}`]);
+                        }}
                         disabled={!isConnected}
                         className="px-2 py-1 text-xs rounded bg-slate-700/60 text-slate-300 border border-slate-600 hover:bg-slate-700 disabled:opacity-50"
                       >Ping STATUS</button>
