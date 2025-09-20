@@ -9,6 +9,7 @@ export type SleepLog = {
   date: string; // ISO date representing wake date
   sleepDuration: number; // hours
   sleepQuality: number; // 1-10
+  optimumSleep?: boolean; // indicates if sleep duration and quality meet optimal criteria
   environment?: {
     temperature?: number; // °C
     lightLevel?: EnvLight;
@@ -24,6 +25,7 @@ type SleepState = {
   removeLog: (id: string) => void;
   clearLogs: () => void;
   seedMockIfEmpty: () => void;
+  overwriteMock: (logs: SleepLog[]) => void;
 };
 
 function uuid() {
@@ -54,47 +56,18 @@ export const useSleepStore = create<SleepState>()(
       seedMockIfEmpty: () => {
         const { logs } = get();
         if (logs.length > 0) return;
-        const base = new Date();
-        const samples: SleepLog[] = Array.from({ length: 7 }).map((_, i) => {
-          const wake = addDays(
-            new Date(base.getFullYear(), base.getMonth(), base.getDate()),
-            -i
-          );
-          const duration =
-            6.5 + Math.max(0, 1.2 - i * 0.05) + (Math.random() - 0.5) * 0.6; // ~6.2-7.8h
-          const quality = Math.max(
-            4,
-            Math.min(9, Math.round(7 + (Math.random() - 0.5) * 3))
-          );
-          const temp = 22 + (Math.random() - 0.5) * 3;
-          const light: EnvLight =
-            Math.random() > 0.7
-              ? "bright"
-              : Math.random() > 0.5
-              ? "dim"
-              : "dark";
-          const noise: EnvNoise =
-            Math.random() > 0.75
-              ? "loud"
-              : Math.random() > 0.5
-              ? "moderate"
-              : "quiet";
-          return {
-            id: uuid(),
-            date: wake.toISOString().slice(0, 10),
-            sleepDuration: Math.round(duration * 10) / 10,
-            sleepQuality: quality,
-            environment: {
-              temperature: Math.round(temp * 10) / 10,
-              lightLevel: light,
-              noiseLevel: noise,
-            },
-            notes: undefined,
-            createdAt: new Date().toISOString(),
-          } as SleepLog;
-        });
-        set({ logs: samples.sort((a, b) => b.date.localeCompare(a.date)) });
+        try {
+          // import the constant mock data for September
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const { getSeptemberMock } = require("@/src/data/mockSleepData");
+          const samples: SleepLog[] = getSeptemberMock();
+          set({ logs: samples.sort((a, b) => b.date.localeCompare(a.date)) });
+        } catch (e) {
+          // fallback: leave logs empty
+          console.warn("Failed to load September mock data", e);
+        }
       },
+      overwriteMock: (newLogs: SleepLog[]) => set({ logs: newLogs.sort((a, b) => b.date.localeCompare(a.date)) }),
     }),
     {
       name: "ss_sleep_logs_v1",

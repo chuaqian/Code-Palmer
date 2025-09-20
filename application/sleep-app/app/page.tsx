@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useId } from "react";
 import { useRouter } from "next/navigation";
+import FireIcon from "@/src/components/icons/FireIcon";
 import { useProfileStore } from "@/src/store/profile.store";
 import { useSleepStore } from "@/src/store/sleep.store";
 import { scoreForLog, summarizeWeek } from "@/src/lib/score";
@@ -16,7 +17,8 @@ import {
   CircularProgress,
   Progress,
 } from "@heroui/react";
-import { LineChart, Sparkline, StackedBar } from "@/src/components/charts";
+import { Sparkline, StackedBar } from "@/src/components/charts";
+import { getSeptemberMock } from "@/src/data/mockSleepData";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -168,24 +170,6 @@ export default function Dashboard() {
     return { labels, durations };
   }, [logs]);
 
-  const trendData = useMemo(() => {
-    return {
-      labels: trend.labels,
-      datasets: [
-        {
-          label: "Hours",
-          data: trend.durations,
-          borderColor: "#a78bfa",
-          backgroundColor: undefined,
-          fill: true,
-          pointBackgroundColor: "#c084fc",
-          pointRadius: 3,
-          tension: 0.35,
-        },
-      ],
-    };
-  }, [trend.labels, trend.durations]);
-
   // Derive mock sleep stages distribution from latest log
   const stages = useMemo(() => {
     if (!latest) return null;
@@ -217,6 +201,24 @@ export default function Dashboard() {
     };
   }, [latest]);
 
+  const currentStreak = useMemo(() => {
+    const mock = getSeptemberMock();
+    const today = new Date();
+    const todayStr = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      .toISOString()
+      .slice(0, 10);
+    // keep only entries up to today
+    const visible = mock.filter((m) => m.date <= todayStr);
+    const source = visible.length > 0 ? visible : logs.filter((l) => l.date <= todayStr);
+    const sorted = [...source].sort((a, b) => b.date.localeCompare(a.date));
+    let streak = 0;
+    for (const log of sorted) {
+      if (!log.optimumSleep) break;
+      streak++;
+    }
+    return streak;
+  }, [logs]);
+
   return (
     <main className="flex-1 p-4 pb-8">
       {" "}
@@ -224,37 +226,51 @@ export default function Dashboard() {
       <header className="-mx-4 px-4">
         <div className="h-[60px] flex items-center justify-between">
           <div className="leading-tight">
-            <div className="text-2xl font-semibold tracking-tight">
-              {dayName}
-            </div>
+            <div className="text-2xl font-semibold tracking-tight">{dayName}</div>
             <div className="text-xs text-neutral-400">{dateRangeLabel}</div>
           </div>
-          <Button
-            isIconOnly
-            variant="light"
-            radius="full"
-            aria-label="Open calendar"
-            onPress={() => router.push("/trends")}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="text-neutral-200"
+
+          {/* grouped actions: fire (streak) + calendar */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                aria-label="Streaks"
+                onClick={() => router.push("/streaks")}
+                className="inline-flex items-center gap-2 rounded-full px-2 py-1 hover:bg-white/3"
+              >
+                <FireIcon className="w-6 h-6" active={currentStreak > 0} />
+                <span className="text-sm font-medium text-neutral-100">{currentStreak}</span>
+              </button>
+            </div>
+
+            <Button
+              isIconOnly
+              variant="light"
+              radius="full"
+              aria-label="Open calendar"
+              onPress={() => router.push("/trends")}
             >
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-          </Button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-neutral-200"
+              >
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+            </Button>
+          </div>
         </div>
+
         {/* Week day selector */}
         <div className="py-1 overflow-x-auto">
           <div className="flex gap-2 w-max">
@@ -314,21 +330,10 @@ export default function Dashboard() {
                     x2="100%"
                     y2="0%"
                   >
-                    <stop
-                      offset="0%"
-                      stopColor="var(--sleep-gradient-start)"
-                      stopOpacity="0.8"
-                    />
-                    <stop
-                      offset="80%"
-                      stopColor="var(--sleep-gradient-end)"
-                      stopOpacity="0.95"
-                    />
-                    <stop
-                      offset="100%"
-                      stopColor="#ffffff"
-                      stopOpacity="0.98"
-                    />
+                    {/* subtle gradient stops for the hero ring */}
+                    <stop offset="0%" stopColor="#6B46C1" stopOpacity="0.95" />
+                    <stop offset="60%" stopColor="#9333EA" stopOpacity="0.98" />
+                    <stop offset="100%" stopColor="#A78BFA" stopOpacity="0.9" />
                   </linearGradient>
                   {/* subtle end glow */}
                   <radialGradient id="endGlow" gradientUnits="userSpaceOnUse">
@@ -473,25 +478,7 @@ export default function Dashboard() {
           </CardBody>
         </HCard>
       )}
-      {/* Weekly Sleep Trend */}
-      {trend.labels.length > 0 && (
-        <HCard className="mt-4 bg-glass border-white/10">
-          <CardHeader className="pb-2">
-            <h3 className="text-lg font-medium">Weekly Sleep Trend</h3>
-          </CardHeader>
-          <CardBody>
-            <LineChart
-              labels={trendData.labels}
-              data={trendData.datasets[0].data}
-              height={200}
-              color="#a78bfa"
-              area
-              gradientFrom="rgba(167,139,250,0.35)"
-              gradientTo="rgba(167,139,250,0.05)"
-            />
-          </CardBody>
-        </HCard>
-      )}
+      
       {/* Insights Carousel */}
       <HCard className="mt-4 bg-glass border-white/10">
         <CardHeader className="pb-2">
