@@ -576,7 +576,7 @@ export default function Dashboard() {
           <h3 className="text-lg font-medium">AI Insights</h3>
         </CardHeader>
         <CardBody>
-          <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2">
+          <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             {(tips && tips.length
               ? tips
               : ["Tap Get Recommendations to generate insights."]

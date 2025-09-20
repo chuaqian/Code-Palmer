@@ -81,35 +81,31 @@ export default function TemperatureInsightCard({
     hot: { label: "Warm/Hot", color: "#F59E0B" },
     rest: { label: "Remaining", color: "rgba(255,255,255,0.12)" },
   };
-
   return (
     <HCard
-      className="rounded-2xl border-white/10"
+      className="rounded-2xl border-white/10 overflow-hidden"
       style={{ background: "#13141A", height: 180 }}
     >
-      <CardBody className="p-5">
-        <div className="flex items-center justify-between">
+      <CardBody className="p-4 h-full flex flex-col justify-between overflow-hidden">
+        <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 text-sm text-neutral-300">
             <ThermometerIcon color="#60A5FA" />
             <span>Temperature</span>
           </div>
         </div>
 
-        <div>
+        <div className="flex-1 flex items-center justify-center">
           {/* Radial stacked bar gauge (semicircle), small to fit card */}
-          <div className="relative mx-auto">
-            <ChartContainer
-              config={chartConfig}
-              className="mx-auto aspect-square"
-            >
+          <div className="relative w-full max-w-[140px] h-[100px]">
+            <ChartContainer config={chartConfig} className="w-full h-full">
               <RadialBarChart
                 data={chartData}
                 startAngle={180}
                 endAngle={0}
                 cx="50%"
-                cy="62%"
-                innerRadius={60}
-                outerRadius={90}
+                cy="70%"
+                innerRadius={45}
+                outerRadius={70}
               >
                 {/* Center readout */}
                 <PolarRadiusAxis tick={false} tickLine={false} axisLine={false}>
@@ -124,18 +120,18 @@ export default function TemperatureInsightCard({
                           >
                             <tspan
                               x={viewBox.cx}
-                              y={(viewBox.cy || 0) - 6}
-                              className="fill-white text-xl font-bold"
+                              y={(viewBox.cy || 0) - 4}
+                              className="fill-white text-lg font-bold"
                             >
                               {Math.round(clamped * 10) / 10}
-                              <tspan className="ml-1 fill-neutral-400 text-base">
+                              <tspan className="ml-1 fill-neutral-400 text-sm">
                                 {unit}
                               </tspan>
                             </tspan>
                             <tspan
                               x={viewBox.cx}
-                              y={(viewBox.cy || 0) + 25}
-                              className="fill-neutral-400 text-sm"
+                              y={(viewBox.cy || 0) + 18}
+                              className="fill-neutral-400 text-xs"
                             >
                               Optimal {optimalMin}–{optimalMax}
                               {unit}
