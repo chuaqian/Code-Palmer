@@ -353,7 +353,7 @@ static void sunrise_task(void *pvParameters) {
     };
     
     int num_steps = sizeof(colors) / sizeof(colors[0]);
-    int delay_ms = 2000; // 2 seconds per step for demo (normally 30s)
+    int delay_ms = 500; // 1 second per step for demo (normally 30s)
     
     for (int i = 0; i < num_steps && g_device_state.sunrise_active; i++) {
         set_rgb_color(colors[i].r, colors[i].g, colors[i].b);
@@ -395,7 +395,7 @@ static void sunset_task(void *pvParameters) {
     };
     
     int num_steps = sizeof(colors) / sizeof(colors[0]);
-    int delay_ms = 1500; // 1.5 seconds per step for demo
+    int delay_ms = 750; // 0.75 seconds per step for demo
     
     for (int i = 0; i < num_steps && g_device_state.sunset_active; i++) {
         set_rgb_color(colors[i].r, colors[i].g, colors[i].b);
@@ -416,20 +416,26 @@ static void alarm_task(void *pvParameters) {
     g_device_state.alarm_active = true;
     send_response("start_alarm", true, "Alarm sequence started");
     
-        // Progressive alarm - increasing intensity over 2 minutes
-        for (int cycle = 0; cycle < 30 && g_device_state.alarm_active; cycle++) {
-            uint8_t intensity = (50 + (cycle * 7) > 255) ? 255 : (50 + (cycle * 7)); // Prevent overflow
-            
-            uint32_t frequency = 800 + (cycle * 20); // Increase pitch
-            if (frequency > 2000) frequency = 2000;        // Flash red with increasing brightness
-        set_rgb_color(intensity, 0, 0);
-        set_buzzer(frequency, intensity / 3);
-        vTaskDelay(pdMS_TO_TICKS(2000)); // 2 seconds on
+    // Progressive alarm - increasing intensity over 2 minutes
+    for (int cycle = 0; cycle < 30 && g_device_state.alarm_active; cycle++) {
+        uint8_t intensity = (50 + (cycle * 7) > 255) ? 255 : (50 + (cycle * 7)); // Prevent overflow
         
+        uint32_t frequency = 800 + (cycle * 20); // Increase pitch
+        if (frequency > 2000) frequency = 2000;
+        
+        // More aggressive volume progression: start very low, increase dramatically
+        uint8_t volume = 0 + (cycle * 8); // Start at 10, increase by 8 each cycle
+        if (volume > 255) volume = 255; // Cap at maximum
+        
+        // Flash red with increasing brightness
+        set_rgb_color(intensity, 0, 0);
+        set_buzzer(frequency, volume);
+        vTaskDelay(pdMS_TO_TICKS(10)); // ON ~120 ms
+
         // Brief pause
         set_rgb_color(0, 0, 0);
-        set_buzzer(0, 0);
-        vTaskDelay(pdMS_TO_TICKS(1000)); // 1 second off
+        ledc_stop(LEDC_MODE, LEDC_CH3_CHANNEL, 0); // OFF hard stop
+        vTaskDelay(pdMS_TO_TICKS(1000)); // OFF ~100 ms
     }
     
     // Final fade out

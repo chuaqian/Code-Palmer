@@ -170,11 +170,12 @@ function reconnectESP32() {
 }
 
 // Normalize command and payload to JSON message format
-function normalizeToJsonMessage(command, payload) {
-    return JSON.stringify({
-        type: command,
-        ...(payload && { payload })
-    });
+// IMPORTANT: The ESP32 firmware expects a JSON object with a `command` field
+// Optionally include a `data` field for arguments. Do NOT rename to `type`/`payload`.
+function normalizeToJsonMessage(command, data) {
+    const msg = { command };
+    if (data !== undefined) msg.data = data;
+    return JSON.stringify(msg);
 }
 
 // Send command to ESP32
@@ -184,14 +185,14 @@ async function ensureESP32Connected() {
     return await connectESP32();
 }
 
-async function sendToESP32(command, payload) {
+async function sendToESP32(command, data) {
     const connected = await ensureESP32Connected();
     if (!connected) {
         console.log('⚠️ ESP32 not connected');
         return false;
     }
 
-    const jsonMessage = normalizeToJsonMessage(command, payload);
+    const jsonMessage = normalizeToJsonMessage(command, data);
     const message = jsonMessage + '\n';
 
     return new Promise((resolve) => {
@@ -242,8 +243,9 @@ wss.on('connection', (ws) => {
             
             // Accept either { command, payload } or { type, payload }
             const command = data.command || data.type;
+            const payloadOrData = (data.payload !== undefined) ? data.payload : data.data;
             if (command) {
-                const success = await sendToESP32(command, data.payload);
+                const success = await sendToESP32(command, payloadOrData);
                 ws.send(JSON.stringify({
                     type: 'command_response',
                     success,
@@ -269,8 +271,9 @@ wss.on('connection', (ws) => {
 
 // Shared handler for ESP32 commands
 async function handleESP32Command(req, res) {
-    const { command, type, payload } = req.body || {};
+    const { command, type, payload, data } = req.body || {};
     const cmd = command || type;
+    const payloadOrData = (payload !== undefined) ? payload : data;
     
     if (!cmd) {
         return res.status(400).json({ 
@@ -278,7 +281,7 @@ async function handleESP32Command(req, res) {
         });
     }
 
-    const success = await sendToESP32(cmd, payload);
+    const success = await sendToESP32(cmd, payloadOrData);
     res.json({
         success,
         command: cmd,

@@ -27,6 +27,7 @@ import HumidityInsightCard from "@/src/components/environment/HumidityInsightCar
 import LightInsightCard from "@/src/components/environment/LightInsightCard";
 import SoundInsightCard from "@/src/components/environment/SoundInsightCard";
 import { getSeptemberMock, getSeptemberDisturbances } from "@/src/data/mockSleepData";
+import { esp32Controller, type ESP32SensorDataMessage } from "@/src/lib/esp32";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -262,51 +263,68 @@ export default function Dashboard() {
     };
   });
 
+  // Map raw light_level (0-4095 typical) to an approximate lux scale 0–100
+  // Note: Photoresistor gives HIGHER readings for LOWER light levels (inverted)
+  function mapLightRawToLux(raw: number | undefined | null): number {
+    if (typeof raw !== "number" || Number.isNaN(raw)) return 0;
+    const clamped = Math.max(0, Math.min(4095, raw));
+    const inverted = 4095 - clamped; // invert: higher light = higher lux
+    const lux = (inverted / 4095) * 100; // linear mapping to 0-100 lux scale
+    return Math.round(lux * 10) / 10;
+  }
+
+  // Keep mocking ambient noise (dBA) and the time labels once per second
   useEffect(() => {
-    const tick = () => {
+    const id = setInterval(() => {
       setEnv((prev) => {
-        const ts = new Date().toLocaleTimeString([], {
-          minute: "2-digit",
-          second: "2-digit",
-        });
-        // gentle mean-reverting random walk per metric
-        const step = (v: number, target: number, jitter: number) => {
-          const drift = (target - v) * 0.03; // pull towards target
-          return v + drift + (Math.random() * 2 - 1) * jitter;
-        };
-        const nextTemp = step(
-          prev.temp[prev.temp.length - 1] ?? 26.6,
-          26.6,
-          0.08
-        );
-        const nextHum = step(prev.hum[prev.hum.length - 1] ?? 57.4, 55.0, 0.4);
-        const nextLux = Math.max(
-          0.1,
-          step(prev.lux[prev.lux.length - 1] ?? 5, 4.5, 0.3)
-        );
-        const nextDba = Math.max(
-          20,
-          step(prev.dba[prev.dba.length - 1] ?? 30, 30, 0.8)
-        );
-        const push = (arr: number[], v: number) => [
-          ...arr.slice(-(MAX_POINTS - 1)),
-          Math.round(v * 10) / 10,
-        ];
-        const pushL = (arr: string[], l: string) => [
-          ...arr.slice(-(MAX_POINTS - 1)),
-          l,
-        ];
+        const ts = new Date().toLocaleTimeString([], { minute: "2-digit", second: "2-digit" });
+        const step = (v: number, target: number, jitter: number) => v + (target - v) * 0.03 + (Math.random() * 2 - 1) * jitter;
+        const nextDba = Math.max(20, step(prev.dba[prev.dba.length - 1] ?? 30, 30, 0.8));
+        const push = (arr: number[], v: number) => [...arr.slice(-(MAX_POINTS - 1)), Math.round(v * 10) / 10];
+        const pushL = (arr: string[], l: string) => [...arr.slice(-(MAX_POINTS - 1)), l];
         return {
+          ...prev,
           labels: pushL(prev.labels, ts),
-          temp: push(prev.temp, nextTemp),
-          hum: push(prev.hum, nextHum),
-          lux: push(prev.lux, nextLux),
           dba: push(prev.dba, nextDba),
         };
       });
-    };
-    const id = setInterval(tick, 1000);
+    }, 1000);
     return () => clearInterval(id);
+  }, []);
+
+  // Subscribe to live ESP32 SSE for temp/humidity/light
+  useEffect(() => {
+    const unsubscribe = esp32Controller.subscribeToStream(
+      (msg: ESP32SensorDataMessage | string) => {
+        let obj: ESP32SensorDataMessage | null = null;
+        if (typeof msg === "string") {
+          try { obj = JSON.parse(msg); } catch { obj = null; }
+        } else {
+          obj = msg;
+        }
+        if (!obj || obj.type !== "sensor_data" || !obj.data) return;
+        const { temperature, humidity, light_level, timestamp } = obj.data as any;
+        const lux = mapLightRawToLux(light_level);
+        const ts = new Date().toLocaleTimeString([], { minute: "2-digit", second: "2-digit" });
+        setEnv((prev) => {
+          const push = (arr: number[], v: number) => [...arr.slice(-(MAX_POINTS - 1)), Math.round(v * 10) / 10];
+          const pushL = (arr: string[], l: string) => [...arr.slice(-(MAX_POINTS - 1)), l];
+          return {
+            labels: pushL(prev.labels, ts),
+            temp: typeof temperature === "number" ? push(prev.temp, temperature) : prev.temp,
+            hum: typeof humidity === "number" ? push(prev.hum, humidity) : prev.hum,
+            lux: push(prev.lux, lux),
+            dba: prev.dba,
+          };
+        });
+      },
+      undefined,
+      (err) => {
+        // Optional: could set a banner/toast; for now keep mocks running
+        console.error("SSE error:", err);
+      }
+    );
+    return () => unsubscribe();
   }, []);
 
   const latestTemp = env.temp[env.temp.length - 1] ?? 0;
@@ -625,7 +643,7 @@ export default function Dashboard() {
             Expected quality: {week.avgQuality || 0}/10 • Weather: clear
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
-            <Button color="success" onPress={() => router.push("/log")}>
+            <Button color="success" onPress={() => router.push("/smartAlarm")}>
               Set Smart Alarm
             </Button>
             <Button variant="flat" onPress={() => router.push("/settings")}>
