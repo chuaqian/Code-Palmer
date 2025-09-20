@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState, useRef, useEffect } from "react";
-import { getSeptemberDisturbances } from "@/src/data/mockSleepData";
+import { getSeptemberDisturbances } from "@/data/mockSleepData";
 
 function fmtTimeLabel(t: string) {
   // Expect strings like "11:00 PM" or "01:00 AM"
@@ -28,7 +28,10 @@ export default function BreathingDisturbancesChart({
     return 0;
   };
 
-  const riskPoints = useMemo(() => data.map((d) => riskToNum(d["Disturbance Risk"])), [data]);
+  const riskPoints = useMemo(
+    () => data.map((d) => riskToNum(d["Disturbance Risk"])),
+    [data]
+  );
 
   // measure available container width so we can compute spacing without scrolling
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -54,7 +57,10 @@ export default function BreathingDisturbancesChart({
   // spacing is determined by available plot width; do NOT make the chart scrollable
   const spacing = plotW / Math.max(1, data.length);
   const minLabelSpacing = 60; // minimum px between labels
-  const labelStep = Math.max(1, Math.ceil(minLabelSpacing / Math.max(1, spacing)));
+  const labelStep = Math.max(
+    1,
+    Math.ceil(minLabelSpacing / Math.max(1, spacing))
+  );
 
   const points = data.map((d, i) => {
     const x = left + i * spacing + spacing / 2;
@@ -115,20 +121,36 @@ export default function BreathingDisturbancesChart({
             {Array.from({ length: 4 }).map((_, i) => {
               const y = 20 + i * 30;
               return (
-                <line key={i} x1={left} x2={right} y1={y} y2={y} stroke="rgba(255,255,255,0.04)" />
+                <line
+                  key={i}
+                  x1={left}
+                  x2={right}
+                  y1={y}
+                  y2={y}
+                  stroke="rgba(255,255,255,0.04)"
+                />
               );
             })}
 
             {/* risk area (closed path) */}
             {points.length > 0 && (
               <path
-                d={`${riskPath} L ${points[points.length - 1].x} ${height - 18} L ${points[0].x} ${height - 18} Z`}
+                d={`${riskPath} L ${points[points.length - 1].x} ${
+                  height - 18
+                } L ${points[0].x} ${height - 18} Z`}
                 fill="url(#riskArea)"
               />
             )}
 
             {/* risk line */}
-            <path d={riskPath} fill="none" stroke="#f87171" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d={riskPath}
+              fill="none"
+              stroke="#f87171"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
 
             {/* bars */}
             {points.map((p, i) => {
@@ -149,7 +171,13 @@ export default function BreathingDisturbancesChart({
                     onMouseLeave={() => setActiveIdx(null)}
                     onBlur={() => setActiveIdx(null)}
                   />
-                  <circle cx={p.x} cy={p.ry} r={3} fill="#f87171" opacity={Math.max(0.35, p.risk)} />
+                  <circle
+                    cx={p.x}
+                    cy={p.ry}
+                    r={3}
+                    fill="#f87171"
+                    opacity={Math.max(0.35, p.risk)}
+                  />
                   {i % labelStep === 0 && (
                     <text
                       x={p.x}
@@ -157,7 +185,10 @@ export default function BreathingDisturbancesChart({
                       textAnchor="middle"
                       fontSize={9}
                       fill="rgba(255,255,255,0.6)"
-                      style={{ transform: 'translateY(0px)', writingMode: 'horizontal-tb' }}
+                      style={{
+                        transform: "translateY(0px)",
+                        writingMode: "horizontal-tb",
+                      }}
                     >
                       {fmtTimeLabel(data[i].Time)}
                     </text>
@@ -174,7 +205,8 @@ export default function BreathingDisturbancesChart({
                   {data[activeIdx]["Time"]} — {data[activeIdx]["Sleep Stage"]}
                 </div>
                 <div className="text-xs mt-1">
-                  Snore count: {data[activeIdx]["Snore Count"]} • Risk: {data[activeIdx]["Disturbance Risk"]}
+                  Snore count: {data[activeIdx]["Snore Count"]} • Risk:{" "}
+                  {data[activeIdx]["Disturbance Risk"]}
                 </div>
               </div>
             </div>

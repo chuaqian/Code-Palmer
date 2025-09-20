@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Chip } from "@heroui/react";
-import { Sparkline } from "@/src/components/charts";
+import { Sparkline } from "@/components/charts";
 
 export default function EnvCard({
   title,

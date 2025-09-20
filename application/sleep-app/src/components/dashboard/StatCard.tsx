@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Card as HCard, CardBody } from "@heroui/react";
-import { Sparkline } from "@/src/components/charts";
+import { Sparkline } from "@/components/charts";
 
 export default function StatCard({
   title,

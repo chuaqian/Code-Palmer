@@ -3,7 +3,7 @@
 import React from "react";
 import { Button } from "@heroui/react";
 import { useRouter } from "next/navigation";
-import FireIcon from "@/src/components/icons/FireIcon";
+import FireIcon from "@/components/icons/FireIcon";
 
 export type WeekDayItem = { key: string; label: string; isToday: boolean };
 

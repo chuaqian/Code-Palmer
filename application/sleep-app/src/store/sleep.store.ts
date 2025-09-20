@@ -59,7 +59,7 @@ export const useSleepStore = create<SleepState>()(
         try {
           // import the constant mock data for September
           // eslint-disable-next-line @typescript-eslint/no-var-requires
-          const { getSeptemberMock } = require("@/src/data/mockSleepData");
+          const { getSeptemberMock } = require("@/data/mockSleepData");
           const samples: SleepLog[] = getSeptemberMock();
           set({ logs: samples.sort((a, b) => b.date.localeCompare(a.date)) });
         } catch (e) {
@@ -67,7 +67,8 @@ export const useSleepStore = create<SleepState>()(
           console.warn("Failed to load September mock data", e);
         }
       },
-      overwriteMock: (newLogs: SleepLog[]) => set({ logs: newLogs.sort((a, b) => b.date.localeCompare(a.date)) }),
+      overwriteMock: (newLogs: SleepLog[]) =>
+        set({ logs: newLogs.sort((a, b) => b.date.localeCompare(a.date)) }),
     }),
     {
       name: "ss_sleep_logs_v1",

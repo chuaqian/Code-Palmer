@@ -1,4 +1,4 @@
-import { SleepLog } from "@/src/store/sleep.store";
+import { SleepLog } from "@/store/sleep.store";
 
 // Constant mock dataset for September 2025 (editable by hand).
 // Dates are ISO yyyy-mm-dd and ordered newest-first when returned.
@@ -313,15 +313,60 @@ export function getSeptemberMock() {
 
 // Hourly disturbances dataset for a single night (developer-editable)
 export const SEPTEMBER_2025_DISTURBANCES = [
-  { Time: "11:00 PM", "Sleep Stage": "Light", "Snore Count": 11, "Disturbance Risk": "Medium" },
-  { Time: "12:00 AM", "Sleep Stage": "Awake", "Snore Count": 5, "Disturbance Risk": "Low" },
-  { Time: "01:00 AM", "Sleep Stage": "REM", "Snore Count": 36, "Disturbance Risk": "High" },
-  { Time: "02:00 AM", "Sleep Stage": "Deep", "Snore Count": 2, "Disturbance Risk": "Low" },
-  { Time: "03:00 AM", "Sleep Stage": "Light", "Snore Count": 8, "Disturbance Risk": "Medium" },
-  { Time: "04:00 AM", "Sleep Stage": "Light", "Snore Count": 5, "Disturbance Risk": "Low" },
-  { Time: "05:00 AM", "Sleep Stage": "Light", "Snore Count": 8, "Disturbance Risk": "Medium" },
-  { Time: "06:00 AM", "Sleep Stage": "Light", "Snore Count": 9, "Disturbance Risk": "Medium" },
-  { Time: "07:00 AM", "Sleep Stage": "REM", "Snore Count": 8, "Disturbance Risk": "Medium" },
+  {
+    Time: "11:00 PM",
+    "Sleep Stage": "Light",
+    "Snore Count": 11,
+    "Disturbance Risk": "Medium",
+  },
+  {
+    Time: "12:00 AM",
+    "Sleep Stage": "Awake",
+    "Snore Count": 5,
+    "Disturbance Risk": "Low",
+  },
+  {
+    Time: "01:00 AM",
+    "Sleep Stage": "REM",
+    "Snore Count": 36,
+    "Disturbance Risk": "High",
+  },
+  {
+    Time: "02:00 AM",
+    "Sleep Stage": "Deep",
+    "Snore Count": 2,
+    "Disturbance Risk": "Low",
+  },
+  {
+    Time: "03:00 AM",
+    "Sleep Stage": "Light",
+    "Snore Count": 8,
+    "Disturbance Risk": "Medium",
+  },
+  {
+    Time: "04:00 AM",
+    "Sleep Stage": "Light",
+    "Snore Count": 5,
+    "Disturbance Risk": "Low",
+  },
+  {
+    Time: "05:00 AM",
+    "Sleep Stage": "Light",
+    "Snore Count": 8,
+    "Disturbance Risk": "Medium",
+  },
+  {
+    Time: "06:00 AM",
+    "Sleep Stage": "Light",
+    "Snore Count": 9,
+    "Disturbance Risk": "Medium",
+  },
+  {
+    Time: "07:00 AM",
+    "Sleep Stage": "REM",
+    "Snore Count": 8,
+    "Disturbance Risk": "Medium",
+  },
 ];
 
 export function getSeptemberDisturbances() {

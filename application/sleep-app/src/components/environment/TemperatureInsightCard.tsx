@@ -8,7 +8,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
   ChartConfig,
-} from "@/src/components/ui/chart";
+} from "@/components/ui/chart";
 import { Label, PolarRadiusAxis, RadialBar, RadialBarChart } from "recharts";
 
 export default function TemperatureInsightCard({

@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import FireIcon from "@/src/components/icons/FireIcon";
-import { useProfileStore } from "@/src/store/profile.store";
-import { useSleepStore } from "@/src/store/sleep.store";
-import { scoreForLog, summarizeWeek } from "@/src/lib/score";
-import { useSettingsStore } from "@/src/store/settings.store";
+import FireIcon from "@/components/icons/FireIcon";
+import { useProfileStore } from "@/store/profile.store";
+import { useSleepStore } from "@/store/sleep.store";
+import { scoreForLog, summarizeWeek } from "@/lib/score";
+import { useSettingsStore } from "@/store/settings.store";
 import {
   Button,
   Card as HCard,
@@ -14,19 +14,22 @@ import {
   CardHeader,
   Divider,
 } from "@heroui/react";
-import { StackedBar } from "@/src/components/charts";
-import StatCard from "@/src/components/dashboard/StatCard";
-import MetricBlock from "@/src/components/dashboard/MetricBlock";
-import { BedIcon, MoonIcon } from "@/src/components/dashboard/icons";
-import SleepStagesTimelineChart from "@/src/components/sleep/SleepStagesTimelineChart";
-import SleepStagesBreakdown from "@/src/components/sleep/SleepStagesBreakdown";
-import BreathingDisturbancesChart from "@/src/components/sleep/BreathingDisturbancesChart";
-import HeaderBar from "@/src/components/dashboard/HeaderBar";
-import TemperatureInsightCard from "@/src/components/environment/TemperatureInsightCard";
-import HumidityInsightCard from "@/src/components/environment/HumidityInsightCard";
-import LightInsightCard from "@/src/components/environment/LightInsightCard";
-import SoundInsightCard from "@/src/components/environment/SoundInsightCard";
-import { getSeptemberMock, getSeptemberDisturbances } from "@/src/data/mockSleepData";
+import { StackedBar } from "@/components/charts";
+import StatCard from "@/components/dashboard/StatCard";
+import MetricBlock from "@/components/dashboard/MetricBlock";
+import { BedIcon, MoonIcon } from "@/components/dashboard/icons";
+import SleepStagesTimelineChart from "@/components/sleep/SleepStagesTimelineChart";
+import SleepStagesBreakdown from "@/components/sleep/SleepStagesBreakdown";
+import BreathingDisturbancesChart from "@/components/sleep/BreathingDisturbancesChart";
+import HeaderBar from "@/components/dashboard/HeaderBar";
+import TemperatureInsightCard from "@/components/environment/TemperatureInsightCard";
+import HumidityInsightCard from "@/components/environment/HumidityInsightCard";
+import LightInsightCard from "@/components/environment/LightInsightCard";
+import SoundInsightCard from "@/components/environment/SoundInsightCard";
+import {
+  getSeptemberMock,
+  getSeptemberDisturbances,
+} from "@/data/mockSleepData";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -606,9 +609,11 @@ export default function Dashboard() {
       </HCard>
       {/* Breathing disturbances reflection (Yesterday) */}
       <HCard>
-      <div className="mt-4">
-        <BreathingDisturbancesChart disturbances={getSeptemberDisturbances()} />
-      </div>
+        <div className="mt-4">
+          <BreathingDisturbancesChart
+            disturbances={getSeptemberDisturbances()}
+          />
+        </div>
       </HCard>
       {/* Tonight's Conditions Preview */}
       <HCard className="mt-4 bg-glass border-white/10">
@@ -625,7 +630,7 @@ export default function Dashboard() {
             Expected quality: {week.avgQuality || 0}/10 • Weather: clear
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
-            <Button color="success" onPress={() => router.push("/log")}>
+            <Button color="success" onPress={() => router.push("/smart-alarm")}>
               Set Smart Alarm
             </Button>
             <Button variant="flat" onPress={() => router.push("/settings")}>
