@@ -1,702 +1,765 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
+#include "freertos/queue.h"
 #include "driver/gpio.h"
-#include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
 #include "driver/ledc.h"
+#include "driver/adc.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
-#include "esp_system.h"
+#include "esp_timer.h"
+#include "cJSON.h"
+// Bind console to USB Serial JTAG so getchar() uses USB
+#include "driver/usb_serial_jtag.h"
+#include "esp_vfs_dev.h"
 
-static const char *TAG = "BLUELY_SLEEP_PEBBLE";
+static const char *TAG = "SLEEPSYNC_ESP32";
 
-// --- Pin Definitions (ESP32-S3 compatible) ---
-#define DHT_PIN             GPIO_NUM_18
-// ESP32-S3 ADC1 channels: GPIO1-GPIO10 are ADC1_CH0-ADC1_CH9
-#define PHOTORESISTOR_GPIO  GPIO_NUM_1     // GPIO1 for HW-486 photoresistor  
-#define SOUND_DIGITAL_GPIO  GPIO_NUM_3     // GPIO3 for HW-496 sound detector (DO - digital output)
-#define PHOTORESISTOR_PIN   ADC_CHANNEL_0  // GPIO1 -> ADC1_CH0
-#define RGB_R_PIN           GPIO_NUM_10
-#define RGB_G_PIN           GPIO_NUM_11
-#define RGB_B_PIN           GPIO_NUM_12
-#define BUZZER_PIN          GPIO_NUM_19
+static const char START_ALARM = "start_sunrise";
+static const char START_ALARM = "start_sunset";
+static const char START_ALARM = "set_rgb";
+static const char START_ALARM = "set_brightness";
 
-// --- Sensor Configuration ---
-#define ADC_SAMPLES         64             // Number of samples for averaging
-#define SENSOR_READ_DELAY   10             // Delay between sensor readings (ms)
-#define LIGHT_THRESHOLD_LOW 800            // Dark threshold (adjust based on your setup)
-#define LIGHT_THRESHOLD_HIGH 2000          // Bright threshold
+static const char START_ALARM = "start_alarm";
+static const char stop_alarm = "stop_alarm";
+static const char enable_alarm = "enable_alarm";
+static const char disable_alarm = "disable_alarm";
+static const char disable_alarm = "test_buzzer";
 
-// --- Global Variables ---
-static adc_oneshot_unit_handle_t adc1_handle;
-static adc_cali_handle_t adc1_cali_handle = NULL;
-static SemaphoreHandle_t sensor_mutex;
+static const char disable_alarm = "get_status";
+static const char disable_alarm = "get_sensors";
+static const char disable_alarm = "stop_all";
+static const char disable_alarm = "reset";
 
-// --- Sensor Data Structures ---
+// --- Hardware Pin Definitions ---
+#define RGB_R_PIN           GPIO_NUM_10    // Red LED
+#define RGB_G_PIN           GPIO_NUM_11    // Green LED  
+#define RGB_B_PIN           GPIO_NUM_12    // Blue LED
+#define BUZZER_PIN          GPIO_NUM_19    // Buzzer
+#define DHT_PIN             GPIO_NUM_18    // DHT11 sensor (future use)
+#define LIGHT_SENSOR_PIN    GPIO_NUM_1     // HW-486 light sensor (ADC)
+#define SOUND_SENSOR_PIN    GPIO_NUM_3     // HW-496 sound detector (digital)
+
+// --- LEDC Configuration ---
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LEDC_CH0_CHANNEL        LEDC_CHANNEL_0  // Red
+#define LEDC_CH1_CHANNEL        LEDC_CHANNEL_1  // Green
+#define LEDC_CH2_CHANNEL        LEDC_CHANNEL_2  // Blue
+#define LEDC_CH3_CHANNEL        LEDC_CHANNEL_3  // Buzzer
+#define LEDC_DUTY_RES           LEDC_TIMER_8_BIT
+#define LEDC_FREQUENCY          (4000) // 4kHz for LEDs
+#define BUZZER_FREQUENCY        (1000) // 1kHz for buzzer
+
+// --- ADC Configuration ---
+#define ADC_CHANNEL_LIGHT       ADC1_CHANNEL_0  // GPIO1
+#define ADC_ATTEN               ADC_ATTEN_DB_12 // Full range 0-3.3V
+#define ADC_WIDTH               ADC_WIDTH_BIT_12 // 12-bit resolution
+
+// --- System State ---
 typedef struct {
-    float voltage;
-    int raw_value;
-    int samples;
-    bool valid;
-} sensor_reading_t;
+    uint8_t red;
+    uint8_t green; 
+    uint8_t blue;
+    uint8_t brightness;
+} rgb_state_t;
 
-typedef enum {
-    LIGHT_DARK = 0,
-    LIGHT_DIM,
-    LIGHT_BRIGHT
-} light_level_t;
-
-typedef enum {
-    SOUND_QUIET = 0,
-    SOUND_MODERATE,
-    SOUND_LOUD
-} sound_level_t;
-
-// --- ADC Calibration Setup ---
-static bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle) {
-    adc_cali_handle_t handle = NULL;
-    esp_err_t ret = ESP_FAIL;
-    bool calibrated = false;
-
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated) {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
-        adc_cali_curve_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .chan = channel,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
-            calibrated = true;
-        }
-    }
-#endif
-
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated) {
-        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
-        adc_cali_line_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
-            calibrated = true;
-        }
-    }
-#endif
-
-    *out_handle = handle;
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "ADC calibration Success");
-    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
-        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
-    } else {
-        ESP_LOGE(TAG, "Invalid arg or no memory");
-    }
-
-    return calibrated;
-}
-
-// --- Improved Sensor Reading Function ---
-static esp_err_t read_sensor_averaged(adc_channel_t channel, sensor_reading_t *reading) {
-    if (!reading) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    // Take mutex for thread-safe ADC access
-    if (xSemaphoreTake(sensor_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to take sensor mutex");
-        return ESP_ERR_TIMEOUT;
-    }
-
-    int sum = 0;
-    int valid_samples = 0;
-    int min_val = 4096, max_val = 0;
-
-    // Take multiple samples for averaging
-    for (int i = 0; i < ADC_SAMPLES; i++) {
-        int raw_value = 0;
-        esp_err_t ret = adc_oneshot_read(adc1_handle, channel, &raw_value);
-        
-        if (ret == ESP_OK && raw_value >= 0 && raw_value <= 4095) {
-            sum += raw_value;
-            valid_samples++;
-            
-            // Track min/max for noise detection
-            if (raw_value < min_val) min_val = raw_value;
-            if (raw_value > max_val) max_val = raw_value;
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(1)); // Small delay between samples
-    }
-
-    xSemaphoreGive(sensor_mutex);
-
-    if (valid_samples == 0) {
-        reading->valid = false;
-        return ESP_FAIL;
-    }
-
-    // Calculate averaged values
-    reading->raw_value = sum / valid_samples;
-    reading->samples = valid_samples;
-    reading->valid = true;
-
-    // Convert to voltage using calibration if available
-    if (adc1_cali_handle) {
-        int voltage_mv = 0;
-        esp_err_t ret = adc_cali_raw_to_voltage(adc1_cali_handle, reading->raw_value, &voltage_mv);
-        if (ret == ESP_OK) {
-            reading->voltage = voltage_mv / 1000.0f; // Convert mV to V
-        } else {
-            reading->voltage = (reading->raw_value * 3.3f) / 4095.0f; // Fallback calculation
-        }
-    } else {
-        reading->voltage = (reading->raw_value * 3.3f) / 4095.0f;
-    }
-
-    // Log noise level for debugging
-    int noise_level = max_val - min_val;
-    if (noise_level > 100) {
-        ESP_LOGW(TAG, "High noise detected on ADC channel %d: %d", channel, noise_level);
-    }
-
-    return ESP_OK;
-}
-
-// --- HW-486 Light Resistor Reading Function ---
-static esp_err_t read_light_sensor(sensor_reading_t *reading, light_level_t *level) {
-    esp_err_t ret = read_sensor_averaged(PHOTORESISTOR_PIN, reading);
-    
-    if (ret != ESP_OK || !reading->valid) {
-        ESP_LOGE(TAG, "Failed to read light sensor");
-        *level = LIGHT_DARK; // Default to dark on error
-        return ret;
-    }
-
-    // Determine light level based on thresholds
-    // Note: HW-486 typically gives lower values in bright light (photoresistor behavior)
-    if (reading->raw_value < LIGHT_THRESHOLD_LOW) {
-        *level = LIGHT_BRIGHT;
-    } else if (reading->raw_value < LIGHT_THRESHOLD_HIGH) {
-        *level = LIGHT_DIM;
-    } else {
-        *level = LIGHT_DARK;
-    }
-
-    ESP_LOGI(TAG, "Light Sensor - Raw: %d, Voltage: %.2fV, Level: %s", 
-             reading->raw_value, reading->voltage,
-             (*level == LIGHT_BRIGHT) ? "BRIGHT" : 
-             (*level == LIGHT_DIM) ? "DIM" : "DARK");
-
-    return ESP_OK;
-}
-
-// --- HW-496 Sound Detector Reading Function ---
-static esp_err_t read_sound_sensor(sound_level_t *level, bool *led_on) {
-    // Read the digital output pin from HW-496 chip
-    bool digital_state = gpio_get_level(SOUND_DIGITAL_GPIO);
-    
-    // HW-496 digital output directly indicates sound detection
-    *led_on = digital_state;
-    
-    // Set sound level based on digital state
-    if (digital_state) {
-        *level = SOUND_LOUD;  // Sound detected
-    } else {
-        *level = SOUND_QUIET; // No sound detected
-    }
-    
-    const char* led_status = *led_on ? "YES" : "NO";
-    const char* level_str = (*level == SOUND_LOUD) ? "LOUD" : "QUIET";
-    
-    ESP_LOGI(TAG, "HW-496 - Digital: %s, Level: %s", 
-             digital_state ? "HIGH" : "LOW", level_str);
-    
-    // Main output for user
-    ESP_LOGI(TAG, "🔊 HW-496 SOUND DETECTED: %s", led_status);
-
-    return ESP_OK;
-}
-
-// --- HW-496 Connection Diagnostics ---
-static void test_hw496_connections(void) {
-    ESP_LOGI(TAG, "🔧 === HW-496 CONNECTION TEST ===");
-    
-    // Test digital connection
-    bool digital_state = gpio_get_level(SOUND_DIGITAL_GPIO);
-    ESP_LOGI(TAG, "Digital connection (GPIO%d): %s", SOUND_DIGITAL_GPIO, digital_state ? "HIGH" : "LOW");
-    
-    ESP_LOGI(TAG, "💡 Expected connections:");
-    ESP_LOGI(TAG, "   HW-496 VCC → ESP32 3.3V");
-    ESP_LOGI(TAG, "   HW-496 GND → ESP32 GND");
-    ESP_LOGI(TAG, "   HW-496 DO  → ESP32 GPIO%d", SOUND_DIGITAL_GPIO);
-    ESP_LOGI(TAG, "🔧 ========================");
-}
-
-// --- Improved DHT11 Reading Function ---
 typedef struct {
-    float humidity;
-    float temperature;
-    bool valid;
-    uint32_t last_read_time;
-} dht11_data_t;
+    bool alarm_enabled;
+    bool alarm_active;
+    bool sunrise_active;
+    bool sunset_active;
+    uint32_t alarm_frequency;
+    uint8_t alarm_volume;
+    rgb_state_t current_rgb;
+} device_state_t;
 
-static dht11_data_t dht11_data = {0};
+typedef struct {
+    uint16_t light_level;      // 0-4095 (ADC raw)
+    bool sound_detected;       // true/false
+    float temperature;         // °C (future DHT11)
+    float humidity;           // % (future DHT11)
+    uint64_t timestamp;       // microseconds since boot
+} sensor_data_t;
 
-// DHT11 timing constants (microseconds)
-#define DHT11_START_LOW     18000   // 18ms low signal
-#define DHT11_START_HIGH    40      // 40us high signal
-#define DHT11_RESPONSE_LOW  80      // 80us response low
-#define DHT11_RESPONSE_HIGH 80      // 80us response high
-#define DHT11_BIT_THRESHOLD 50      // 50us threshold for 0/1 bit
-#define DHT11_MIN_INTERVAL  2000    // Minimum 2 seconds between reads
+// Global state
+static device_state_t g_device_state = {0};
+static sensor_data_t g_sensor_data = {0};
+static TaskHandle_t g_alarm_task = NULL;
+static TaskHandle_t g_sunrise_task = NULL;
+static TaskHandle_t g_sunset_task = NULL;
+static QueueHandle_t g_command_queue;
 
-static esp_err_t read_dht11_improved(float* humidity, float* temperature) {
-    uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
-    
-    // Check if enough time has passed since last read
-    if (current_time - dht11_data.last_read_time < DHT11_MIN_INTERVAL) {
-        if (dht11_data.valid) {
-            *humidity = dht11_data.humidity;
-            *temperature = dht11_data.temperature;
-            return ESP_OK;
-        } else {
-            return ESP_ERR_INVALID_STATE;
-        }
-    }
+// List of commands
+const 
 
-    uint8_t data[5] = {0};
-    uint32_t timeout_counter;
+// --- Hardware Setup ---
+static esp_err_t setup_gpio(void) {
+    // Configure input pins
+    gpio_config_t input_conf = {
+        .pin_bit_mask = (1ULL << SOUND_SENSOR_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    esp_err_t ret = gpio_config(&input_conf);
+    if (ret != ESP_OK) return ret;
     
-    // Disable interrupts during critical timing section
-    portDISABLE_INTERRUPTS();
-    
-    // Send start signal
-    gpio_set_direction(DHT_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(DHT_PIN, 0);
-    esp_rom_delay_us(DHT11_START_LOW);
-    gpio_set_level(DHT_PIN, 1);
-    esp_rom_delay_us(DHT11_START_HIGH);
-    
-    // Switch to input mode
-    gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT);
-    
-    // Wait for DHT11 response - LOW pulse
-    timeout_counter = 0;
-    while (gpio_get_level(DHT_PIN) == 1) {
-        esp_rom_delay_us(1);
-        if (++timeout_counter > 100) {
-            portENABLE_INTERRUPTS();
-            ESP_LOGE(TAG, "DHT11 timeout waiting for response LOW");
-            return ESP_ERR_TIMEOUT;
-        }
-    }
-    
-    // Wait for DHT11 response - HIGH pulse
-    timeout_counter = 0;
-    while (gpio_get_level(DHT_PIN) == 0) {
-        esp_rom_delay_us(1);
-        if (++timeout_counter > 100) {
-            portENABLE_INTERRUPTS();
-            ESP_LOGE(TAG, "DHT11 timeout waiting for response HIGH");
-            return ESP_ERR_TIMEOUT;
-        }
-    }
-    
-    // Wait for start of data transmission
-    timeout_counter = 0;
-    while (gpio_get_level(DHT_PIN) == 1) {
-        esp_rom_delay_us(1);
-        if (++timeout_counter > 100) {
-            portENABLE_INTERRUPTS();
-            ESP_LOGE(TAG, "DHT11 timeout waiting for data start");
-            return ESP_ERR_TIMEOUT;
-        }
-    }
-    
-    // Read 40 bits of data
-    for (int i = 0; i < 40; i++) {
-        // Wait for bit start (LOW to HIGH transition)
-        timeout_counter = 0;
-        while (gpio_get_level(DHT_PIN) == 0) {
-            esp_rom_delay_us(1);
-            if (++timeout_counter > 100) {
-                portENABLE_INTERRUPTS();
-                ESP_LOGE(TAG, "DHT11 timeout on bit %d LOW", i);
-                return ESP_ERR_TIMEOUT;
-            }
-        }
-        
-        // Measure HIGH pulse duration
-        uint32_t high_time = 0;
-        while (gpio_get_level(DHT_PIN) == 1) {
-            esp_rom_delay_us(1);
-            high_time++;
-            if (high_time > 100) {
-                portENABLE_INTERRUPTS();
-                ESP_LOGE(TAG, "DHT11 timeout on bit %d HIGH", i);
-                return ESP_ERR_TIMEOUT;
-            }
-        }
-        
-        // Determine if bit is 0 or 1 based on pulse duration
-        if (high_time > DHT11_BIT_THRESHOLD) {
-            data[i / 8] |= (1 << (7 - (i % 8)));
-        }
-    }
-    
-    portENABLE_INTERRUPTS();
-    
-    // Verify checksum
-    uint8_t checksum = data[0] + data[1] + data[2] + data[3];
-    if (checksum != data[4]) {
-        ESP_LOGE(TAG, "DHT11 checksum error: calculated=0x%02X, received=0x%02X", checksum, data[4]);
-        return ESP_ERR_INVALID_CRC;
-    }
-    
-    // Parse data
-    dht11_data.humidity = (float)data[0] + (float)data[1] * 0.1f;
-    dht11_data.temperature = (float)data[2] + (float)data[3] * 0.1f;
-    dht11_data.valid = true;
-    dht11_data.last_read_time = current_time;
-    
-    *humidity = dht11_data.humidity;
-    *temperature = dht11_data.temperature;
-    
-    ESP_LOGI(TAG, "DHT11 - Humidity: %.1f%%, Temperature: %.1f°C", *humidity, *temperature);
-    
+    ESP_LOGI(TAG, "✅ GPIO configured - Sound sensor ready");
     return ESP_OK;
 }
 
-// --- Buzzer Helper Functions ---
-static esp_err_t buzzer_init(void) {
+static esp_err_t setup_adc(void) {
+    // Configure ADC1 for light sensor
+    esp_err_t ret = adc1_config_width(ADC_WIDTH);
+    if (ret != ESP_OK) return ret;
+    
+    ret = adc1_config_channel_atten(ADC_CHANNEL_LIGHT, ADC_ATTEN);
+    if (ret != ESP_OK) return ret;
+    
+    ESP_LOGI(TAG, "✅ ADC configured - Light sensor ready");
+    return ESP_OK;
+}
+
+static esp_err_t setup_ledc(void) {
+    // Timer config for RGB LEDs
     ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num = LEDC_TIMER_0,
-        .freq_hz = 2000,
-        .clk_cfg = LEDC_AUTO_CLK
+        .duty_resolution = LEDC_DUTY_RES,
+        .freq_hz = LEDC_FREQUENCY,
+        .speed_mode = LEDC_MODE,
+        .timer_num = LEDC_TIMER
     };
     esp_err_t ret = ledc_timer_config(&ledc_timer);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure LEDC timer: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    if (ret != ESP_OK) return ret;
 
-    ledc_channel_config_t ledc_channel = {
-        .gpio_num = BUZZER_PIN,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER_0,
-        .duty = 0,
-        .hpoint = 0
+    // RGB LED channels
+    ledc_channel_config_t ledc_channels[] = {
+        {.channel = LEDC_CH0_CHANNEL, .duty = 0, .gpio_num = RGB_R_PIN, .speed_mode = LEDC_MODE, .hpoint = 0, .timer_sel = LEDC_TIMER},
+        {.channel = LEDC_CH1_CHANNEL, .duty = 0, .gpio_num = RGB_G_PIN, .speed_mode = LEDC_MODE, .hpoint = 0, .timer_sel = LEDC_TIMER},
+        {.channel = LEDC_CH2_CHANNEL, .duty = 0, .gpio_num = RGB_B_PIN, .speed_mode = LEDC_MODE, .hpoint = 0, .timer_sel = LEDC_TIMER}
     };
-    ret = ledc_channel_config(&ledc_channel);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure LEDC channel: %s", esp_err_to_name(ret));
-        return ret;
-    }
 
-    return ESP_OK;
-}
-
-static void play_tone(int frequency, int duration_ms) {
-    if (frequency == 0) {
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    } else {
-        ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, frequency);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 128); // 50% duty cycle
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-    }
-    vTaskDelay(pdMS_TO_TICKS(duration_ms));
-    // Stop tone after duration
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-}
-
-static void play_error_sound(void) {
+    // Configure RGB channels
     for (int i = 0; i < 3; i++) {
-        play_tone(200, 100);
-        vTaskDelay(pdMS_TO_TICKS(100));
+        ret = ledc_channel_config(&ledc_channels[i]);
+        if (ret != ESP_OK) return ret;
     }
-}
 
-// --- RGB LED Helper Functions ---
-typedef enum {
-    LED_OFF = 0,
-    LED_RED,
-    LED_GREEN,
-    LED_BLUE,
-    LED_YELLOW,
-    LED_PURPLE,
-    LED_CYAN,
-    LED_WHITE
-} led_color_t;
-
-static void set_rgb_color(led_color_t color) {
-    // Turn off all LEDs first
-    gpio_set_level(RGB_R_PIN, 0);
-    gpio_set_level(RGB_G_PIN, 0);
-    gpio_set_level(RGB_B_PIN, 0);
-    
-    switch (color) {
-        case LED_RED:
-            gpio_set_level(RGB_R_PIN, 1);
-            break;
-        case LED_GREEN:
-            gpio_set_level(RGB_G_PIN, 1);
-            break;
-        case LED_BLUE:
-            gpio_set_level(RGB_B_PIN, 1);
-            break;
-        case LED_YELLOW:
-            gpio_set_level(RGB_R_PIN, 1);
-            gpio_set_level(RGB_G_PIN, 1);
-            break;
-        case LED_PURPLE:
-            gpio_set_level(RGB_R_PIN, 1);
-            gpio_set_level(RGB_B_PIN, 1);
-            break;
-        case LED_CYAN:
-            gpio_set_level(RGB_G_PIN, 1);
-            gpio_set_level(RGB_B_PIN, 1);
-            break;
-        case LED_WHITE:
-            gpio_set_level(RGB_R_PIN, 1);
-            gpio_set_level(RGB_G_PIN, 1);
-            gpio_set_level(RGB_B_PIN, 1);
-            break;
-        case LED_OFF:
-        default:
-            // Already turned off above
-            break;
-    }
-}
-
-// --- System Initialization Functions ---
-static esp_err_t gpio_init_all(void) {
-    // Configure RGB LED pins
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << RGB_R_PIN) | (1ULL << RGB_G_PIN) | (1ULL << RGB_B_PIN),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
+    // Buzzer timer (separate frequency)
+    ledc_timer_config_t buzzer_timer = {
+        .duty_resolution = LEDC_DUTY_RES,
+        .freq_hz = BUZZER_FREQUENCY,
+        .speed_mode = LEDC_MODE,
+        .timer_num = LEDC_TIMER_1
     };
-    esp_err_t ret = gpio_config(&io_conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure GPIO: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    ret = ledc_timer_config(&buzzer_timer);
+    if (ret != ESP_OK) return ret;
 
-    // Configure HW-496 digital input pin
-    gpio_config_t sound_digital_conf = {
-        .pin_bit_mask = (1ULL << SOUND_DIGITAL_GPIO),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
+    // Buzzer channel
+    ledc_channel_config_t buzzer_channel = {
+        .channel = LEDC_CH3_CHANNEL,
+        .duty = 0,
+        .gpio_num = BUZZER_PIN,
+        .speed_mode = LEDC_MODE,
+        .hpoint = 0,
+        .timer_sel = LEDC_TIMER_1
     };
-    ret = gpio_config(&sound_digital_conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure HW-496 digital GPIO: %s", esp_err_to_name(ret));
-        return ret;
-    }
+    ret = ledc_channel_config(&buzzer_channel);
+    if (ret != ESP_OK) return ret;
 
-    // Configure DHT11 pin as input with pull-up
-    gpio_config_t dht_conf = {
-        .pin_bit_mask = (1ULL << DHT_PIN),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
-    };
-    ret = gpio_config(&dht_conf);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure DHT11 GPIO: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
+    ESP_LOGI(TAG, "✅ LEDC configured - RGB LEDs + Buzzer ready");
     return ESP_OK;
 }
 
-static esp_err_t adc_init_all(void) {
-    // Initialize ADC1
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    esp_err_t ret = adc_oneshot_new_unit(&init_config1, &adc1_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize ADC unit: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    // Configure ADC channel for light sensor only
-    adc_oneshot_chan_cfg_t config = {
-        .bitwidth = ADC_BITWIDTH_12,      // 12-bit resolution for better precision
-        .atten = ADC_ATTEN_DB_12,         // 12dB attenuation for 0-3.3V range
-    };
+// --- Device Control Functions ---
+static esp_err_t set_rgb_color(uint8_t red, uint8_t green, uint8_t blue) {
+    esp_err_t ret = ESP_OK;
     
-    ret = adc_oneshot_config_channel(adc1_handle, PHOTORESISTOR_PIN, &config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to config ADC channel %d: %s", PHOTORESISTOR_PIN, esp_err_to_name(ret));
-        return ret;
+    ret |= ledc_set_duty(LEDC_MODE, LEDC_CH0_CHANNEL, red);
+    ret |= ledc_set_duty(LEDC_MODE, LEDC_CH1_CHANNEL, green);
+    ret |= ledc_set_duty(LEDC_MODE, LEDC_CH2_CHANNEL, blue);
+    
+    ret |= ledc_update_duty(LEDC_MODE, LEDC_CH0_CHANNEL);
+    ret |= ledc_update_duty(LEDC_MODE, LEDC_CH1_CHANNEL);
+    ret |= ledc_update_duty(LEDC_MODE, LEDC_CH2_CHANNEL);
+    
+    if (ret == ESP_OK) {
+        g_device_state.current_rgb.red = red;
+        g_device_state.current_rgb.green = green;
+        g_device_state.current_rgb.blue = blue;
     }
+    
+    return ret;
+}
 
-    // Initialize ADC calibration
-    bool calibrated = adc_calibration_init(ADC_UNIT_1, PHOTORESISTOR_PIN, ADC_ATTEN_DB_12, &adc1_cali_handle);
-    if (calibrated) {
-        ESP_LOGI(TAG, "ADC calibration initialized successfully");
+static esp_err_t set_buzzer(uint32_t frequency, uint8_t volume) {
+    esp_err_t ret = ESP_OK;
+    
+    if (volume > 0 && frequency > 0) {
+        ret |= ledc_set_freq(LEDC_MODE, LEDC_TIMER_1, frequency);
+        ret |= ledc_set_duty(LEDC_MODE, LEDC_CH3_CHANNEL, volume);
+        ret |= ledc_update_duty(LEDC_MODE, LEDC_CH3_CHANNEL);
+        
+        g_device_state.alarm_frequency = frequency;
+        g_device_state.alarm_volume = volume;
     } else {
-        ESP_LOGW(TAG, "ADC calibration not available, using raw conversion");
+        ret |= ledc_set_duty(LEDC_MODE, LEDC_CH3_CHANNEL, 0);
+        ret |= ledc_update_duty(LEDC_MODE, LEDC_CH3_CHANNEL);
+        
+        g_device_state.alarm_frequency = 0;
+        g_device_state.alarm_volume = 0;
     }
-
-    return ESP_OK;
+    
+    return ret;
 }
 
-// --- Main Sensor Monitoring Task ---
-static void sensor_monitor_task(void *pvParameters) {
-    sensor_reading_t light_reading;
-    light_level_t light_level;
-    sound_level_t sound_level;
-    bool sound_led_on = false;
-    float humidity, temperature;
+static void stop_all_effects(void) {
+    // Stop all running tasks
+    if (g_alarm_task) {
+        vTaskDelete(g_alarm_task);
+        g_alarm_task = NULL;
+    }
+    if (g_sunrise_task) {
+        vTaskDelete(g_sunrise_task);
+        g_sunrise_task = NULL;
+    }
+    if (g_sunset_task) {
+        vTaskDelete(g_sunset_task);
+        g_sunset_task = NULL;
+    }
     
-    TickType_t last_wake_time = xTaskGetTickCount();
-    const TickType_t frequency = pdMS_TO_TICKS(500); // 0.5 second intervals for continuous monitoring
+    // Turn off all outputs
+    set_rgb_color(0, 0, 0);
+    set_buzzer(0, 0);
     
-    ESP_LOGI(TAG, "Sensor monitoring task started - Continuous streaming mode");
+    // Update state
+    g_device_state.alarm_active = false;
+    g_device_state.sunrise_active = false;
+    g_device_state.sunset_active = false;
     
-    while (1) {
-        // Read DHT11 temperature and humidity (less frequently for performance)
-        static int dht_counter = 0;
-        if (dht_counter++ % 10 == 0) { // Read DHT11 every 5 seconds (10 * 0.5s)
-            esp_err_t dht_ret = read_dht11_improved(&humidity, &temperature);
-            if (dht_ret == ESP_OK) {
-                ESP_LOGI(TAG, "DHT11 - Temp: %.1f°C, Humidity: %.1f%%", temperature, humidity);
-            }
+    ESP_LOGI(TAG, "⏹️ All effects stopped");
+}
+
+// --- Sensor Reading Functions ---
+static void read_sensors(void) {
+    // Read light sensor (ADC)
+    int light_raw = adc1_get_raw(ADC_CHANNEL_LIGHT);
+    g_sensor_data.light_level = (light_raw < 0) ? 0 : (uint16_t)light_raw;
+    
+    // Read sound sensor (digital)
+    g_sensor_data.sound_detected = gpio_get_level(SOUND_SENSOR_PIN);
+    
+    // TODO: Add DHT11 temperature/humidity reading
+    g_sensor_data.temperature = 22.5f; // Placeholder
+    g_sensor_data.humidity = 45.0f;    // Placeholder
+    
+    // Update timestamp
+    g_sensor_data.timestamp = esp_timer_get_time();
+}
+
+// --- JSON Output Functions ---
+static void send_sensor_data(void) {
+    cJSON *json = cJSON_CreateObject();
+    cJSON *data = cJSON_CreateObject();
+    
+    cJSON_AddStringToObject(json, "type", "sensor_data");
+    cJSON_AddNumberToObject(data, "light_level", g_sensor_data.light_level);
+    cJSON_AddBoolToObject(data, "sound_detected", g_sensor_data.sound_detected);
+    cJSON_AddNumberToObject(data, "temperature", g_sensor_data.temperature);
+    cJSON_AddNumberToObject(data, "humidity", g_sensor_data.humidity);
+    cJSON_AddNumberToObject(data, "timestamp", g_sensor_data.timestamp);
+    cJSON_AddItemToObject(json, "data", data);
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        printf("%s\n", json_string);
+        free(json_string);
+    }
+    cJSON_Delete(json);
+}
+
+static void send_device_status(void) {
+    cJSON *json = cJSON_CreateObject();
+    cJSON *status = cJSON_CreateObject();
+    cJSON *rgb = cJSON_CreateObject();
+    
+    cJSON_AddStringToObject(json, "type", "device_status");
+    
+    cJSON_AddBoolToObject(status, "alarm_enabled", g_device_state.alarm_enabled);
+    cJSON_AddBoolToObject(status, "alarm_active", g_device_state.alarm_active);
+    cJSON_AddBoolToObject(status, "sunrise_active", g_device_state.sunrise_active);
+    cJSON_AddBoolToObject(status, "sunset_active", g_device_state.sunset_active);
+    cJSON_AddNumberToObject(status, "alarm_frequency", g_device_state.alarm_frequency);
+    cJSON_AddNumberToObject(status, "alarm_volume", g_device_state.alarm_volume);
+    
+    cJSON_AddNumberToObject(rgb, "red", g_device_state.current_rgb.red);
+    cJSON_AddNumberToObject(rgb, "green", g_device_state.current_rgb.green);
+    cJSON_AddNumberToObject(rgb, "blue", g_device_state.current_rgb.blue);
+    cJSON_AddItemToObject(status, "rgb", rgb);
+    
+    cJSON_AddItemToObject(json, "status", status);
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        printf("%s\n", json_string);
+        free(json_string);
+    }
+    cJSON_Delete(json);
+}
+
+static void send_response(const char* command, bool success, const char* message) {
+    cJSON *json = cJSON_CreateObject();
+    
+    cJSON_AddStringToObject(json, "type", "command_response");
+    cJSON_AddStringToObject(json, "command", command);
+    cJSON_AddBoolToObject(json, "success", success);
+    cJSON_AddStringToObject(json, "message", message);
+    cJSON_AddNumberToObject(json, "timestamp", esp_timer_get_time());
+    
+    char *json_string = cJSON_Print(json);
+    if (json_string) {
+        printf("%s\n", json_string);
+        free(json_string);
+    }
+    cJSON_Delete(json);
+}
+
+// --- Sleep Effect Tasks ---
+static void sunrise_task(void *pvParameters) {
+    g_device_state.sunrise_active = true;
+    send_response("start_sunrise", true, "Sunrise simulation started");
+    
+    // Sunrise color progression - 20 steps over 10 minutes (30s each)
+    typedef struct { uint8_t r, g, b; } color_t;
+    color_t colors[] = {
+        {5, 0, 0},      // Very dim red
+        {15, 5, 0},     // Dim red
+        {30, 10, 0},    // Deep red
+        {50, 15, 0},    // Red-orange
+        {80, 25, 5},    // Orange
+        {120, 40, 10},  // Bright orange
+        {160, 60, 15},  // Warm orange
+        {200, 80, 20},  // Yellow-orange
+        {255, 120, 40}, // Bright orange
+        {255, 160, 60}, // Warm white
+        {255, 200, 80}, // Warmer white
+        {255, 220, 120},// Bright warm
+        {255, 240, 160},// Cool white
+        {255, 255, 200},// Daylight
+        {255, 255, 255} // Full white
+    };
+    
+    int num_steps = sizeof(colors) / sizeof(colors[0]);
+    int delay_ms = 2000; // 2 seconds per step for demo (normally 30s)
+    
+    for (int i = 0; i < num_steps && g_device_state.sunrise_active; i++) {
+        set_rgb_color(colors[i].r, colors[i].g, colors[i].b);
+        ESP_LOGI(TAG, "🌅 Sunrise Step %d/%d", i+1, num_steps);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+    
+    if (g_device_state.sunrise_active) {
+        send_response("sunrise_complete", true, "Sunrise simulation completed");
+    }
+    
+    g_device_state.sunrise_active = false;
+    g_sunrise_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void sunset_task(void *pvParameters) {
+    g_device_state.sunset_active = true;
+    send_response("start_sunset", true, "Sunset simulation started");
+    
+    // Sunset color progression (reverse of sunrise)
+    typedef struct { uint8_t r, g, b; } color_t;
+    color_t colors[] = {
+        {255, 255, 255}, // Full white
+        {255, 240, 160}, // Cool white
+        {255, 220, 120}, // Bright warm
+        {255, 200, 80},  // Warmer white
+        {255, 160, 60},  // Warm white
+        {255, 120, 40},  // Bright orange
+        {200, 80, 20},   // Yellow-orange
+        {160, 60, 15},   // Warm orange
+        {120, 40, 10},   // Bright orange
+        {80, 25, 5},     // Orange
+        {50, 15, 0},     // Red-orange
+        {30, 10, 0},     // Deep red
+        {15, 5, 0},      // Dim red
+        {5, 0, 0},       // Very dim red
+        {0, 0, 0}        // Off
+    };
+    
+    int num_steps = sizeof(colors) / sizeof(colors[0]);
+    int delay_ms = 1500; // 1.5 seconds per step for demo
+    
+    for (int i = 0; i < num_steps && g_device_state.sunset_active; i++) {
+        set_rgb_color(colors[i].r, colors[i].g, colors[i].b);
+        ESP_LOGI(TAG, "🌇 Sunset Step %d/%d", i+1, num_steps);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+    
+    if (g_device_state.sunset_active) {
+        send_response("sunset_complete", true, "Sunset simulation completed");
+    }
+    
+    g_device_state.sunset_active = false;
+    g_sunset_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void alarm_task(void *pvParameters) {
+    g_device_state.alarm_active = true;
+    send_response("start_alarm", true, "Alarm sequence started");
+    
+        // Progressive alarm - increasing intensity over 2 minutes
+        for (int cycle = 0; cycle < 30 && g_device_state.alarm_active; cycle++) {
+            uint8_t intensity = (50 + (cycle * 7) > 255) ? 255 : (50 + (cycle * 7)); // Prevent overflow
+            
+            uint32_t frequency = 800 + (cycle * 20); // Increase pitch
+            if (frequency > 2000) frequency = 2000;        // Flash red with increasing brightness
+        set_rgb_color(intensity, 0, 0);
+        set_buzzer(frequency, intensity / 3);
+        vTaskDelay(pdMS_TO_TICKS(2000)); // 2 seconds on
+        
+        // Brief pause
+        set_rgb_color(0, 0, 0);
+        set_buzzer(0, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000)); // 1 second off
+    }
+    
+    // Final fade out
+    stop_all_effects();
+    send_response("alarm_complete", true, "Alarm sequence completed");
+    
+    g_device_state.alarm_active = false;
+    g_alarm_task = NULL;
+    vTaskDelete(NULL);
+}
+// --- JSON Command Processing ---
+static void process_json_command(const char *json_str) {
+    cJSON *json = cJSON_Parse(json_str);
+    if (!json) {
+        send_response("parse_error", false, "Invalid JSON format");
+        return;
+    }
+    
+    cJSON *command = cJSON_GetObjectItem(json, "command");
+    if (!command || !cJSON_IsString(command)) {
+        send_response("missing_command", false, "Missing or invalid command field");
+        cJSON_Delete(json);
+        return;
+    }
+    
+    const char *cmd = command->valuestring;
+    ESP_LOGI(TAG, "📨 Processing command: %s", cmd);
+    
+    // === LIGHTING COMMANDS ===
+    if (strcmp(cmd, "start_sunrise") == 0) {
+        if (!g_device_state.sunrise_active) {
+            stop_all_effects(); // Stop other effects first
+            xTaskCreate(sunrise_task, "sunrise", 3072, NULL, 5, &g_sunrise_task);
+        } else {
+            send_response(cmd, false, "Sunrise already active");
         }
+    }
+    else if (strcmp(cmd, "start_sunset") == 0) {
+        if (!g_device_state.sunset_active) {
+            stop_all_effects();
+            xTaskCreate(sunset_task, "sunset", 3072, NULL, 5, &g_sunset_task);
+        } else {
+            send_response(cmd, false, "Sunset already active");
+        }
+    }
+    else if (strcmp(cmd, "set_rgb") == 0) {
+        cJSON *r = cJSON_GetObjectItem(json, "r");
+        cJSON *g = cJSON_GetObjectItem(json, "g");
+        cJSON *b = cJSON_GetObjectItem(json, "b");
         
-        // Read light sensor
-        esp_err_t light_ret = read_light_sensor(&light_reading, &light_level);
-        const char* light_str = (light_level == LIGHT_BRIGHT) ? "BRIGHT" : 
-                               (light_level == LIGHT_DIM) ? "DIM" : "DARK";
-        
-        // Read sound sensor - this is the main focus
-        esp_err_t sound_ret = read_sound_sensor(&sound_level, &sound_led_on);
-        
-        // Streamlined output for continuous monitoring
-        if (sound_ret == ESP_OK && light_ret == ESP_OK) {
-            if (sound_led_on) {
-                ESP_LOGI(TAG, "🔴 SOUND DETECTED | Light: %s | HW-496: ACTIVE", light_str);
-                set_rgb_color(LED_RED); // Sound detected - show red for immediate visibility
-                play_tone(1000, 50);    // Quick beep
+        if (r && g && b && cJSON_IsNumber(r) && cJSON_IsNumber(g) && cJSON_IsNumber(b)) {
+            uint8_t red = (uint8_t)cJSON_GetNumberValue(r);
+            uint8_t green = (uint8_t)cJSON_GetNumberValue(g);
+            uint8_t blue = (uint8_t)cJSON_GetNumberValue(b);
+            
+            stop_all_effects(); // Stop automatic effects
+            esp_err_t ret = set_rgb_color(red, green, blue);
+            if (ret == ESP_OK) {
+                send_response(cmd, true, "RGB color set");
             } else {
-                ESP_LOGI(TAG, "⚫ Quiet | Light: %s | HW-496: Inactive", light_str);
-                // Set LED color based on light level when quiet
-                if (light_level == LIGHT_BRIGHT) {
-                    set_rgb_color(LED_GREEN); // Bright and quiet
-                } else {
-                    set_rgb_color(LED_BLUE);  // Dark and quiet
-                }
+                send_response(cmd, false, "Failed to set RGB color");
             }
         } else {
-            ESP_LOGE(TAG, "❌ Sensor Error");
-            set_rgb_color(LED_PURPLE); // Error state
+            send_response(cmd, false, "Invalid RGB parameters (r, g, b required)");
+        }
+    }
+    else if (strcmp(cmd, "set_brightness") == 0) {
+        cJSON *brightness = cJSON_GetObjectItem(json, "brightness");
+        if (brightness && cJSON_IsNumber(brightness)) {
+            uint8_t level = (uint8_t)cJSON_GetNumberValue(brightness);
+            uint8_t r = (g_device_state.current_rgb.red * level) / 255;
+            uint8_t g = (g_device_state.current_rgb.green * level) / 255;
+            uint8_t b = (g_device_state.current_rgb.blue * level) / 255;
+            
+            esp_err_t ret = set_rgb_color(r, g, b);
+            if (ret == ESP_OK) {
+                g_device_state.current_rgb.brightness = level;
+                send_response(cmd, true, "Brightness set");
+            } else {
+                send_response(cmd, false, "Failed to set brightness");
+            }
+        } else {
+            send_response(cmd, false, "Invalid brightness parameter");
+        }
+    }
+    
+    // === ALARM COMMANDS ===
+    else if (strcmp(cmd, "start_alarm") == 0) {
+        if (!g_device_state.alarm_active) {
+            stop_all_effects();
+            xTaskCreate(alarm_task, "alarm", 3072, NULL, 5, &g_alarm_task);
+        } else {
+            send_response(cmd, false, "Alarm already active");
+        }
+    }
+    else if (strcmp(cmd, "stop_alarm") == 0) {
+        if (g_device_state.alarm_active) {
+            stop_all_effects();
+            send_response(cmd, true, "Alarm stopped");
+        } else {
+            send_response(cmd, false, "No alarm active");
+        }
+    }
+    else if (strcmp(cmd, "enable_alarm") == 0) {
+        g_device_state.alarm_enabled = true;
+        send_response(cmd, true, "Alarm system enabled");
+    }
+    else if (strcmp(cmd, "disable_alarm") == 0) {
+        g_device_state.alarm_enabled = false;
+        if (g_device_state.alarm_active) {
+            stop_all_effects();
+        }
+        send_response(cmd, true, "Alarm system disabled");
+    }
+    else if (strcmp(cmd, "test_buzzer") == 0) {
+        cJSON *freq = cJSON_GetObjectItem(json, "frequency");
+        cJSON *vol = cJSON_GetObjectItem(json, "volume");
+        cJSON *duration = cJSON_GetObjectItem(json, "duration");
+        
+        uint32_t frequency = freq && cJSON_IsNumber(freq) ? (uint32_t)cJSON_GetNumberValue(freq) : 1000;
+        uint8_t volume = vol && cJSON_IsNumber(vol) ? (uint8_t)cJSON_GetNumberValue(vol) : 100;
+        uint32_t dur_ms = duration && cJSON_IsNumber(duration) ? (uint32_t)cJSON_GetNumberValue(duration) : 1000;
+        
+        set_buzzer(frequency, volume);
+        vTaskDelay(pdMS_TO_TICKS(dur_ms));  
+        set_buzzer(0, 0);
+        send_response(cmd, true, "Buzzer test completed");
+    }
+    
+    // === SYSTEM COMMANDS ===
+    else if (strcmp(cmd, "get_status") == 0) {
+        send_device_status();
+        send_response(cmd, true, "Status sent");
+    }
+    else if (strcmp(cmd, "get_sensors") == 0) {
+        read_sensors();
+        send_sensor_data();
+        send_response(cmd, true, "Sensor data sent");
+    }
+    else if (strcmp(cmd, "stop_all") == 0) {
+        stop_all_effects();
+        send_response(cmd, true, "All effects stopped");
+    }
+    else if (strcmp(cmd, "reset") == 0) {
+        stop_all_effects();
+        g_device_state.alarm_enabled = false;
+        send_response(cmd, true, "Device reset to default state");
+    }
+    else {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "Unknown command: %s", cmd);
+        send_response(cmd, false, error_msg);
+    }
+    
+    cJSON_Delete(json);
+}
+
+// --- Serial Input Task ---
+static void serial_input_task(void *pvParameters) {
+    char input_buffer[512];
+    int buffer_pos = 0;
+    bool in_json = false;
+    int brace_count = 0;
+    
+    ESP_LOGI(TAG, "📺 JSON Serial Interface Ready");
+    
+    while (1) {
+        int c = getchar();
+        
+        if (c != EOF) {
+            if (c == '{') {
+                if (!in_json) {
+                    in_json = true;
+                    buffer_pos = 0;
+                    brace_count = 0;
+                }
+                brace_count++;
+                if (buffer_pos < sizeof(input_buffer) - 1) {
+                    input_buffer[buffer_pos++] = (char)c;
+                }
+            }
+            else if (in_json) {
+                if (buffer_pos < sizeof(input_buffer) - 1) {
+                    input_buffer[buffer_pos++] = (char)c;
+                }
+                
+                if (c == '}') {
+                    brace_count--;
+                    if (brace_count == 0) {
+                        // Complete JSON received
+                        input_buffer[buffer_pos] = '\0';
+                        process_json_command(input_buffer);
+                        in_json = false;
+                        buffer_pos = 0;
+                    }
+                }
+            }
         }
         
-        vTaskDelayUntil(&last_wake_time, frequency);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
-void app_main(void) {
-    ESP_LOGI(TAG, "=== BLUELY SLEEP PEBBLE STARTING ===");
-    ESP_LOGI(TAG, "ESP32-S3 with HW-486 Light Resistor & HW-496 Sound Detector");
-    ESP_LOGI(TAG, "🎯 Configured for HW-496 digital detection with continuous streaming");
+// --- Sensor Monitoring Task ---
+static void sensor_monitoring_task(void *pvParameters) {
+    ESP_LOGI(TAG, "📡 Sensor monitoring started");
+    uint64_t last_send_time = 0;
     
-    // Create mutex for thread-safe sensor access
-    sensor_mutex = xSemaphoreCreateMutex();
-    if (sensor_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create sensor mutex");
-        return;
-    }
-    
-    // Initialize all GPIO pins
-    esp_err_t ret = gpio_init_all();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO initialization failed: %s", esp_err_to_name(ret));
-        return;
-    }
-    ESP_LOGI(TAG, "✓ GPIO initialized");
-    
-    // Initialize RGB LED (start with red to show initialization)
-    set_rgb_color(LED_RED);
-    
-    // Initialize ADC
-    ret = adc_init_all();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "ADC initialization failed: %s", esp_err_to_name(ret));
-        set_rgb_color(LED_RED);
-        play_error_sound();
-        return;
-    }
-    ESP_LOGI(TAG, "✓ ADC initialized");
-    
-    // Initialize buzzer
-    ret = buzzer_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Buzzer initialization failed: %s", esp_err_to_name(ret));
-        set_rgb_color(LED_RED);
-        return;
-    }
-    ESP_LOGI(TAG, "✓ Buzzer initialized");
-    
-    // Show successful initialization
-    set_rgb_color(LED_GREEN);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    
-    ESP_LOGI(TAG, "=== SYSTEM INITIALIZATION COMPLETE ===");
-    
-    // Test HW-496 connections before starting
-    test_hw496_connections();
-    
-    // Create sensor monitoring task
-    BaseType_t task_ret = xTaskCreate(
-        sensor_monitor_task,
-        "sensor_monitor",
-        4096,                // Stack size
-        NULL,                // Parameters
-        5,                   // Priority
-        NULL                 // Task handle
-    );
-    
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create sensor monitoring task");
-        set_rgb_color(LED_RED);
-        play_error_sound();
-        return;
-    }
-    
-    ESP_LOGI(TAG, "✓ Sensor monitoring task created");
-    ESP_LOGI(TAG, "=== BLUELY SLEEP PEBBLE READY ===");
-    
-    // Main loop for periodic status updates
     while (1) {
-        // Wait longer to let the monitoring task do its work
-        vTaskDelay(pdMS_TO_TICKS(30000)); // 30 seconds
+        // Read all sensors
+        read_sensors();
         
-        ESP_LOGI(TAG, "System running normally - HW-496 continuous monitoring active");
+        // Send sensor data every 2 seconds
+        uint64_t now = esp_timer_get_time();
+        if (now - last_send_time > 2000000) { // 2 seconds in microseconds
+            send_sensor_data();
+            last_send_time = now;
+        }
+        
+        // Check for sound events (immediate notification)
+        static bool last_sound_state = false;
+        if (g_sensor_data.sound_detected != last_sound_state) {
+            if (g_sensor_data.sound_detected) {
+                // Send immediate sound detection notification
+                cJSON *json = cJSON_CreateObject();
+                cJSON_AddStringToObject(json, "type", "sound_event");
+                cJSON_AddBoolToObject(json, "detected", true);
+                cJSON_AddNumberToObject(json, "timestamp", g_sensor_data.timestamp);
+                
+                char *json_string = cJSON_Print(json);
+                if (json_string) {
+                    printf("%s\n", json_string);
+                    free(json_string);
+                }
+                cJSON_Delete(json);
+                
+                // Brief visual feedback if no other effects running
+                if (!g_device_state.alarm_active && !g_device_state.sunrise_active && !g_device_state.sunset_active) {
+                    rgb_state_t original = g_device_state.current_rgb;
+                    set_rgb_color(255, 255, 0); // Yellow flash
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    set_rgb_color(original.red, original.green, original.blue); // Restore
+                }
+            }
+            last_sound_state = g_sensor_data.sound_detected;
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(100)); // Check every 100ms
     }
+}
+
+// --- Main Application ---
+void app_main(void) {
+    ESP_LOGI(TAG, "🚀 SleepSync ESP32 Starting...");
+
+    // Initialize device state
+    memset(&g_device_state, 0, sizeof(g_device_state));
+    memset(&g_sensor_data, 0, sizeof(g_sensor_data));
+    
+    // Create command queue
+    g_command_queue = xQueueCreate(10, sizeof(char*));
+    if (!g_command_queue) {
+        ESP_LOGE(TAG, "Failed to create command queue");
+        return;
+    }
+
+    // Route console I/O to USB Serial JTAG
+    usb_serial_jtag_driver_config_t usb_cfg = {
+        .tx_buffer_size = 512,
+        .rx_buffer_size = 512,
+    };
+    esp_err_t usb_ret = usb_serial_jtag_driver_install(&usb_cfg);
+    if (usb_ret == ESP_OK) {
+        esp_vfs_usb_serial_jtag_use_driver(); // Note: deprecated but still functional
+        setvbuf(stdin, NULL, _IONBF, 0);
+        setvbuf(stdout, NULL, _IONBF, 0);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        ESP_LOGI(TAG, "🔌 USB Serial JTAG console active");
+    } else {
+        ESP_LOGW(TAG, "⚠️ Failed to init USB Serial JTAG (%d)", usb_ret);
+    }
+    
+    // Hardware initialization
+    esp_err_t ret = ESP_OK;
+    ret |= setup_gpio();
+    ret |= setup_adc();
+    ret |= setup_ledc();
+    
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "❌ Hardware initialization failed");
+        return;
+    }
+    
+    // Brief startup sequence
+    ESP_LOGI(TAG, "🔄 Running startup test...");
+    set_rgb_color(255, 0, 0);   // Red
+    vTaskDelay(pdMS_TO_TICKS(300));
+    set_rgb_color(0, 255, 0);   // Green  
+    vTaskDelay(pdMS_TO_TICKS(300));
+    set_rgb_color(0, 0, 255);   // Blue
+    vTaskDelay(pdMS_TO_TICKS(300));
+    set_rgb_color(0, 0, 0);     // Off
+    
+    set_buzzer(1000, 100);      // Brief beep
+    vTaskDelay(pdMS_TO_TICKS(200));
+    set_buzzer(0, 0);
+    
+    ESP_LOGI(TAG, "✅ Hardware test complete - All systems ready!");
+    
+    // Send initial status
+    vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for serial to stabilize
+    
+    // Send ready notification
+    cJSON *ready_json = cJSON_CreateObject();
+    cJSON_AddStringToObject(ready_json, "type", "device_ready");
+    cJSON_AddStringToObject(ready_json, "device", "SleepSync ESP32");
+    cJSON_AddStringToObject(ready_json, "version", "1.0.0");
+    cJSON_AddNumberToObject(ready_json, "timestamp", esp_timer_get_time());
+    
+    char *ready_string = cJSON_Print(ready_json);
+    if (ready_string) {
+        printf("%s\n", ready_string);
+        free(ready_string);
+    }
+    cJSON_Delete(ready_json);
+    
+    // Start tasks
+    xTaskCreate(serial_input_task, "serial_input", 4096, NULL, 10, NULL);
+    xTaskCreate(sensor_monitoring_task, "sensor_monitor", 3072, NULL, 5, NULL);
+    
+    ESP_LOGI(TAG, "🎯 SleepSync ready! Send JSON commands via USB serial");
+    ESP_LOGI(TAG, "📡 Streaming sensor data every 2 seconds");
 }
