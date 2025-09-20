@@ -19,6 +19,46 @@ let esp32Port = null;
 let esp32Parser = null;
 let connectedClients = new Set();
 
+// Command aliases to match ESP32 firmware expectations
+// Firmware expects JSON like { "command": "start_sunrise", ... }
+const COMMAND_ALIAS = {
+    FAST_SUNRISE: { command: 'start_sunrise', fast: true },
+    FAST_SUNSET: { command: 'start_sunset', fast: true },
+    START_SUNRISE: { command: 'start_sunrise' },
+    START_SUNSET: { command: 'start_sunset' },
+};
+
+function normalizeToJsonMessage(input, payload) {
+    // If already an object, merge and stringify
+    if (typeof input === 'object' && input !== null) {
+        const obj = { ...input, ...(payload && typeof payload === 'object' ? payload : {}) };
+        return JSON.stringify(obj);
+    }
+
+    // If a JSON string is provided, pass through
+    if (typeof input === 'string' && input.trim().startsWith('{')) {
+        return input.trim();
+    }
+
+    // Map aliases (e.g., FAST_SUNRISE) to firmware JSON commands
+    if (typeof input === 'string') {
+        const key = input.trim().toUpperCase();
+        const mapped = COMMAND_ALIAS[key];
+        if (mapped) {
+            const obj = { ...mapped, ...(payload && typeof payload === 'object' ? payload : {}) };
+            return JSON.stringify(obj);
+        }
+
+        // Fallback: convert to lowercase command name
+        // e.g., 'START_SUNRISE' -> { command: 'start_sunrise' }
+        const fallback = input.trim().toLowerCase();
+        return JSON.stringify({ command: fallback, ...(payload && typeof payload === 'object' ? payload : {}) });
+    }
+
+    // Last resort
+    return JSON.stringify({ command: 'noop' });
+}
+
 // Auto-detect ESP32 device
 async function findESP32() {
     try {
@@ -74,7 +114,7 @@ async function connectESP32() {
             autoOpen: false
         });
 
-        esp32Parser = esp32Port.pipe(new ReadlineParser({ delimiter: '\n' }));
+    esp32Parser = esp32Port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
         return new Promise((resolve) => {
             esp32Port.open((err) => {
@@ -85,13 +125,43 @@ async function connectESP32() {
                 }
 
                 console.log(`✅ ESP32 connected on ${portPath}`);
-                
+
                 // Handle incoming data from ESP32
+                // Accumulate pretty-printed JSON from multiple lines
+                let jsonBuffer = '';
+                let braceDepth = 0;
                 esp32Parser.on('data', (data) => {
-                    const message = data.trim();
-                    if (message) {
-                        console.log('📨 ESP32 →', message);
-                        broadcastToClients(message);
+                    const line = data.toString();
+                    const trimmed = line.trimEnd();
+
+                    // Naive brace depth tracking to reconstruct multi-line JSON
+                    const opens = (trimmed.match(/[\{\[]/g) || []).length;
+                    const closes = (trimmed.match(/[\}\]]/g) || []).length;
+
+                    if (braceDepth > 0 || trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                        if (!jsonBuffer) jsonBuffer = '';
+                        jsonBuffer += (jsonBuffer ? '\n' : '') + trimmed;
+                        braceDepth += opens - closes;
+
+                        if (braceDepth <= 0) {
+                            const full = jsonBuffer.trim();
+                            jsonBuffer = '';
+                            braceDepth = 0;
+                            try {
+                                const obj = JSON.parse(full);
+                                console.log('📨 ESP32 →', JSON.stringify(obj));
+                                broadcastToClients(JSON.stringify(obj));
+                            } catch (e) {
+                                console.log('📨 ESP32 →', full);
+                                broadcastToClients(full);
+                            }
+                        }
+                        return;
+                    }
+
+                    if (trimmed) {
+                        console.log('📨 ESP32 →', trimmed);
+                        broadcastToClients(trimmed);
                     }
                 });
 
@@ -126,16 +196,40 @@ function reconnectESP32() {
 }
 
 // Send command to ESP32
-function sendToESP32(command) {
-    if (esp32Port && esp32Port.isOpen) {
-        const message = command + '\n';
-        esp32Port.write(message);
-        console.log('📤 → ESP32:', command);
-        return true;
-    } else {
+async function ensureESP32Connected() {
+    if (esp32Port && esp32Port.isOpen) return true;
+    console.log('ℹ️ Ensuring ESP32 connection...');
+    return await connectESP32();
+}
+
+async function sendToESP32(command, payload) {
+    const connected = await ensureESP32Connected();
+    if (!connected) {
         console.log('⚠️ ESP32 not connected');
         return false;
     }
+
+    const jsonMessage = normalizeToJsonMessage(command, payload);
+    const message = jsonMessage + '\n';
+
+    return new Promise((resolve) => {
+        esp32Port.write(message, (err) => {
+            if (err) {
+                console.error('❌ Write failed:', err.message);
+                resolve(false);
+                return;
+            }
+            esp32Port.drain((drainErr) => {
+                if (drainErr) {
+                    console.error('❌ Drain failed:', drainErr.message);
+                    resolve(false);
+                    return;
+                }
+                console.log('📤 → ESP32:', jsonMessage);
+                resolve(true);
+            });
+        });
+    });
 }
 
 // Broadcast to all WebSocket clients
@@ -159,17 +253,19 @@ wss.on('connection', (ws) => {
         timestamp: new Date().toISOString()
     }));
 
-    ws.on('message', (message) => {
+    ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message);
             console.log('📥 WebSocket →', data);
             
-            if (data.command) {
-                const success = sendToESP32(data.command);
+            // Accept either { command, payload } or { type, payload }
+            const command = data.command || data.type;
+            if (command) {
+                const success = await sendToESP32(command, data.payload);
                 ws.send(JSON.stringify({
                     type: 'command_response',
                     success,
-                    command: data.command,
+                    command,
                     timestamp: new Date().toISOString()
                 }));
             }
@@ -198,18 +294,29 @@ app.get('/status', (req, res) => {
     });
 });
 
-app.post('/command', (req, res) => {
-    const { command } = req.body;
+app.post('/command', async (req, res) => {
+    const { command, payload } = req.body || {};
     if (!command) {
         return res.status(400).json({ error: 'Command required' });
     }
 
-    const success = sendToESP32(command);
+    const success = await sendToESP32(command, payload);
     res.json({
         success,
         command,
         timestamp: new Date().toISOString()
     });
+});
+
+// Compatibility endpoint seen in client logs: POST /api/esp32
+// Accepts { type: 'FAST_SUNRISE' | 'START_SUNRISE' | ... , payload?: {} }
+app.post('/api/esp32', async (req, res) => {
+    const { type, command, payload } = req.body || {};
+    const cmd = command || type;
+    if (!cmd) return res.status(400).json({ error: 'type or command is required' });
+
+    const success = await sendToESP32(cmd, payload);
+    res.json({ success, command: cmd, timestamp: new Date().toISOString() });
 });
 
 app.get('/ports', async (req, res) => {

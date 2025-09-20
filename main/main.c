@@ -535,7 +535,7 @@ static void process_json_command(const char *json_str) {
         uint32_t dur_ms = duration && cJSON_IsNumber(duration) ? (uint32_t)cJSON_GetNumberValue(duration) : 1000;
         
         set_buzzer(frequency, volume);
-        vTaskDelay(pdMS_TO_TICKS(dur_ms));
+        vTaskDelay(pdMS_TO_TICKS(dur_ms));  
         set_buzzer(0, 0);
         send_response(cmd, true, "Buzzer test completed");
     }
