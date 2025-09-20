@@ -2,9 +2,9 @@
 
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useSleepStore } from "@/src/store/sleep.store";
+import { useSleepStore } from "@/store/sleep.store";
 import { Button, Card, CardBody, CardHeader, Divider } from "@heroui/react";
-import { MultiLineChart } from "@/src/components/charts";
+import { MultiLineChart } from "@/components/charts";
 
 export default function TrendsPage() {
   const router = useRouter();

@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useProfileStore } from "@/src/store/profile.store";
+import { useProfileStore } from "@/store/profile.store";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {

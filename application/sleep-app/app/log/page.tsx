@@ -8,7 +8,7 @@ import {
   useSleepStore,
   type EnvLight,
   type EnvNoise,
-} from "@/src/store/sleep.store";
+} from "@/store/sleep.store";
 import {
   Button,
   Card,

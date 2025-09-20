@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState, useId } from "react";
 import { useRouter } from "next/navigation";
-import { useProfileStore } from "@/src/store/profile.store";
-import { useSleepStore } from "@/src/store/sleep.store";
-import { scoreForLog, summarizeWeek } from "@/src/lib/score";
-import { useSettingsStore } from "@/src/store/settings.store";
+import { useProfileStore } from "@/store/profile.store";
+import { useSleepStore } from "@/store/sleep.store";
+import { scoreForLog, summarizeWeek } from "@/lib/score";
+import { useSettingsStore } from "@/store/settings.store";
 import {
   Button,
   Card as HCard,
@@ -16,7 +16,8 @@ import {
   CircularProgress,
   Progress,
 } from "@heroui/react";
-import { LineChart, Sparkline, StackedBar } from "@/src/components/charts";
+import { LineChart, Sparkline, StackedBar } from "@/components/charts";
+import ESP32DemoControl from "@/components/ui/ESP32DemoControl";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -544,11 +545,11 @@ export default function Dashboard() {
             Expected quality: {week.avgQuality || 0}/10 • Weather: clear
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
-            <Button color="success" onPress={() => router.push("/log")}>
-              Set Smart Alarm
+            <Button color="success" onPress={() => router.push("/smart-alarm")}>
+              Smart Alarm
             </Button>
             <Button variant="flat" onPress={() => router.push("/settings")}>
-              Reminder Settings
+              Settings
             </Button>
           </div>
         </CardBody>
@@ -564,6 +565,9 @@ export default function Dashboard() {
           +
         </Button>
       </div>
+      
+      {/* ESP32 Demo Control */}
+      <ESP32DemoControl />
     </main>
   );
 }

@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useSettingsStore } from "@/src/store/settings.store";
-import { useProfileStore } from "@/src/store/profile.store";
-import { useSleepStore } from "@/src/store/sleep.store";
+import { useSettingsStore } from "@/store/settings.store";
+import { useProfileStore } from "@/store/profile.store";
+import { useSleepStore } from "@/store/sleep.store";
 import {
   Button,
   Card,
