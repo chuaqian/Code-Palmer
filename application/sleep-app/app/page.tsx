@@ -264,12 +264,11 @@ export default function Dashboard() {
   });
 
   // Map raw light_level (0-4095 typical) to an approximate lux scale 0–100
-  // Note: Photoresistor gives HIGHER readings for LOWER light levels (inverted)
+  // Photoresistor: higher readings = less light, so we invert the mapping
   function mapLightRawToLux(raw: number | undefined | null): number {
     if (typeof raw !== "number" || Number.isNaN(raw)) return 0;
     const clamped = Math.max(0, Math.min(4095, raw));
-    const inverted = 4095 - clamped; // invert: higher light = higher lux
-    const lux = (inverted / 4095) * 100; // linear mapping to 0-100 lux scale
+    const lux = ((4095 - clamped) / 4095) * 100; // inverted: higher raw = lower lux
     return Math.round(lux * 10) / 10;
   }
 
