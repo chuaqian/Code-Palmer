@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import FireIcon from "@/src/components/icons/FireIcon";
 import { useProfileStore } from "@/src/store/profile.store";
 import { useSleepStore } from "@/src/store/sleep.store";
 import { scoreForLog, summarizeWeek } from "@/src/lib/score";
@@ -13,7 +14,7 @@ import {
   CardHeader,
   Divider,
 } from "@heroui/react";
-import { LineChart, StackedBar } from "@/src/components/charts";
+import { StackedBar } from "@/src/components/charts";
 import StatCard from "@/src/components/dashboard/StatCard";
 import MetricBlock from "@/src/components/dashboard/MetricBlock";
 import { BedIcon, MoonIcon } from "@/src/components/dashboard/icons";
@@ -24,6 +25,7 @@ import TemperatureInsightCard from "@/src/components/environment/TemperatureInsi
 import HumidityInsightCard from "@/src/components/environment/HumidityInsightCard";
 import LightInsightCard from "@/src/components/environment/LightInsightCard";
 import SoundInsightCard from "@/src/components/environment/SoundInsightCard";
+import { getSeptemberMock } from "@/src/data/mockSleepData";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -175,24 +177,6 @@ export default function Dashboard() {
     return { labels, durations };
   }, [logs]);
 
-  const trendData = useMemo(() => {
-    return {
-      labels: trend.labels,
-      datasets: [
-        {
-          label: "Hours",
-          data: trend.durations,
-          borderColor: "#a78bfa",
-          backgroundColor: undefined,
-          fill: true,
-          pointBackgroundColor: "#c084fc",
-          pointRadius: 3,
-          tension: 0.35,
-        },
-      ],
-    };
-  }, [trend.labels, trend.durations]);
-
   // Derive mock sleep stages distribution from latest log
   const stages = useMemo(() => {
     if (!latest) return null;
@@ -223,6 +207,29 @@ export default function Dashboard() {
       hours: dur,
     };
   }, [latest]);
+
+  const currentStreak = useMemo(() => {
+    const mock = getSeptemberMock();
+    const today = new Date();
+    const todayStr = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    )
+      .toISOString()
+      .slice(0, 10);
+    // keep only entries up to today
+    const visible = mock.filter((m) => m.date <= todayStr);
+    const source =
+      visible.length > 0 ? visible : logs.filter((l) => l.date <= todayStr);
+    const sorted = [...source].sort((a, b) => b.date.localeCompare(a.date));
+    let streak = 0;
+    for (const log of sorted) {
+      if (!log.optimumSleep) break;
+      streak++;
+    }
+    return streak;
+  }, [logs]);
 
   // ======== LIVE ENVIRONMENT (mock stream until IoT is connected) ========
   type EnvState = {
@@ -342,6 +349,7 @@ export default function Dashboard() {
         dateRangeLabel={dateRangeLabel}
         weekDays={weekDays}
         onCalendar={() => router.push("/trends")}
+        currentStreak={currentStreak}
       />
       {/* Sleep Score Hero Card */}
       <HCard className="mt-2 rounded-3xl border-white/10 bg-glass overflow-hidden">
@@ -375,21 +383,10 @@ export default function Dashboard() {
                     x2="100%"
                     y2="0%"
                   >
-                    <stop
-                      offset="0%"
-                      stopColor="var(--sleep-gradient-start)"
-                      stopOpacity="0.8"
-                    />
-                    <stop
-                      offset="80%"
-                      stopColor="var(--sleep-gradient-end)"
-                      stopOpacity="0.95"
-                    />
-                    <stop
-                      offset="100%"
-                      stopColor="#ffffff"
-                      stopOpacity="0.98"
-                    />
+                    {/* subtle gradient stops for the hero ring */}
+                    <stop offset="0%" stopColor="#6B46C1" stopOpacity="0.95" />
+                    <stop offset="60%" stopColor="#9333EA" stopOpacity="0.98" />
+                    <stop offset="100%" stopColor="#A78BFA" stopOpacity="0.9" />
                   </linearGradient>
                   {/* subtle end glow */}
                   <radialGradient id="endGlow" gradientUnits="userSpaceOnUse">
@@ -566,25 +563,6 @@ export default function Dashboard() {
               <span>REM</span>
               <span>Awake</span>
             </div>
-          </CardBody>
-        </HCard>
-      )}
-      {/* Weekly Sleep Trend */}
-      {trend.labels.length > 0 && (
-        <HCard className="mt-4 bg-glass border-white/10">
-          <CardHeader className="pb-2">
-            <h3 className="text-lg font-medium">Weekly Sleep Trend</h3>
-          </CardHeader>
-          <CardBody>
-            <LineChart
-              labels={trendData.labels}
-              data={trendData.datasets[0].data}
-              height={200}
-              color="#a78bfa"
-              area
-              gradientFrom="rgba(167,139,250,0.35)"
-              gradientTo="rgba(167,139,250,0.05)"
-            />
           </CardBody>
         </HCard>
       )}

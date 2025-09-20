@@ -2,6 +2,8 @@
 
 import React from "react";
 import { Button } from "@heroui/react";
+import { useRouter } from "next/navigation";
+import FireIcon from "@/src/components/icons/FireIcon";
 
 export type WeekDayItem = { key: string; label: string; isToday: boolean };
 
@@ -10,18 +12,34 @@ export default function HeaderBar({
   dateRangeLabel,
   weekDays,
   onCalendar,
+  currentStreak,
 }: {
   dayName: string;
   dateRangeLabel: string;
   weekDays: WeekDayItem[];
   onCalendar: () => void;
+  currentStreak: number;
 }) {
+  const router = useRouter();
   return (
     <header className="-mx-4 px-4">
       <div className="h-[60px] flex items-center justify-between">
-        <div className="leading-tight">
-          <div className="text-2xl font-semibold tracking-tight">{dayName}</div>
+        <div className="flex items-center gap-3">
+          <div className="text-3xl font-semibold tracking-tight">{dayName}</div>
           <div className="text-xs text-neutral-400">{dateRangeLabel}</div>
+        </div>
+        {/* grouped actions: fire (streak) + calendar */}
+        <div className="flex items-center gap-2">
+          <button
+            aria-label="Streaks"
+            onClick={() => router.push("/streaks")}
+            className="inline-flex items-center gap-2 rounded-full px-2 py-1 hover:bg-white/3"
+          >
+            <FireIcon className="w-6 h-6" active={currentStreak > 0} />
+            <span className="text-sm font-medium text-neutral-100">
+              {currentStreak}
+            </span>
+          </button>
         </div>
         <Button
           isIconOnly
