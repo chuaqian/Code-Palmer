@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useId } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProfileStore } from "@/src/store/profile.store";
 import { useSleepStore } from "@/src/store/sleep.store";
@@ -12,11 +12,18 @@ import {
   CardBody,
   CardHeader,
   Divider,
-  Chip,
-  CircularProgress,
-  Progress,
 } from "@heroui/react";
-import { LineChart, Sparkline, StackedBar } from "@/src/components/charts";
+import { LineChart, StackedBar } from "@/src/components/charts";
+import StatCard from "@/src/components/dashboard/StatCard";
+import MetricBlock from "@/src/components/dashboard/MetricBlock";
+import { BedIcon, MoonIcon } from "@/src/components/dashboard/icons";
+import SleepStagesTimelineChart from "@/src/components/sleep/SleepStagesTimelineChart";
+import SleepStagesBreakdown from "@/src/components/sleep/SleepStagesBreakdown";
+import HeaderBar from "@/src/components/dashboard/HeaderBar";
+import TemperatureInsightCard from "@/src/components/environment/TemperatureInsightCard";
+import HumidityInsightCard from "@/src/components/environment/HumidityInsightCard";
+import LightInsightCard from "@/src/components/environment/LightInsightCard";
+import SoundInsightCard from "@/src/components/environment/SoundInsightCard";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -217,74 +224,128 @@ export default function Dashboard() {
     };
   }, [latest]);
 
+  // ======== LIVE ENVIRONMENT (mock stream until IoT is connected) ========
+  type EnvState = {
+    labels: string[]; // mm:ss for last N seconds
+    temp: number[]; // °C
+    hum: number[]; // %RH
+    lux: number[]; // lux
+    dba: number[]; // dBA
+  };
+  const MAX_POINTS = 60; // last 60s window
+  const [env, setEnv] = useState<EnvState>(() => {
+    const seedLen = MAX_POINTS;
+    const now = new Date();
+    const mkLabels = Array.from({ length: seedLen }, (_, i) => {
+      const d = new Date(now.getTime() - (seedLen - 1 - i) * 1000);
+      return d.toLocaleTimeString([], { minute: "2-digit", second: "2-digit" });
+    });
+    const seed = (base: number, jitter: number) =>
+      Array.from(
+        { length: seedLen },
+        () => base + (Math.random() * 2 - 1) * jitter
+      );
+    return {
+      labels: mkLabels,
+      temp: seed(26.6, 0.15), // from sample log
+      hum: seed(57.4, 0.6),
+      lux: seed(5, 0.5), // DIM ≈ 5 lux
+      dba: seed(30, 1.2), // QUIET ≈ 30 dBA
+    };
+  });
+
+  useEffect(() => {
+    const tick = () => {
+      setEnv((prev) => {
+        const ts = new Date().toLocaleTimeString([], {
+          minute: "2-digit",
+          second: "2-digit",
+        });
+        // gentle mean-reverting random walk per metric
+        const step = (v: number, target: number, jitter: number) => {
+          const drift = (target - v) * 0.03; // pull towards target
+          return v + drift + (Math.random() * 2 - 1) * jitter;
+        };
+        const nextTemp = step(
+          prev.temp[prev.temp.length - 1] ?? 26.6,
+          26.6,
+          0.08
+        );
+        const nextHum = step(prev.hum[prev.hum.length - 1] ?? 57.4, 55.0, 0.4);
+        const nextLux = Math.max(
+          0.1,
+          step(prev.lux[prev.lux.length - 1] ?? 5, 4.5, 0.3)
+        );
+        const nextDba = Math.max(
+          20,
+          step(prev.dba[prev.dba.length - 1] ?? 30, 30, 0.8)
+        );
+        const push = (arr: number[], v: number) => [
+          ...arr.slice(-(MAX_POINTS - 1)),
+          Math.round(v * 10) / 10,
+        ];
+        const pushL = (arr: string[], l: string) => [
+          ...arr.slice(-(MAX_POINTS - 1)),
+          l,
+        ];
+        return {
+          labels: pushL(prev.labels, ts),
+          temp: push(prev.temp, nextTemp),
+          hum: push(prev.hum, nextHum),
+          lux: push(prev.lux, nextLux),
+          dba: push(prev.dba, nextDba),
+        };
+      });
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const latestTemp = env.temp[env.temp.length - 1] ?? 0;
+  const latestHum = env.hum[env.hum.length - 1] ?? 0;
+  const latestLux = env.lux[env.lux.length - 1] ?? 0;
+  const latestDba = env.dba[env.dba.length - 1] ?? 0;
+
+  function classifyTemperature(t: number) {
+    // Removed "Out of range" classification per design; bucket to Cool/Optimal/Warm
+    if (t < 18) return { status: "Cool", color: "#60a5fa" };
+    if (t <= 24) return { status: "Optimal", color: "#34d399" };
+    return { status: "Warm", color: "#f59e0b" };
+  }
+  function classifyHumidity(h: number) {
+    if (h < 30 || h > 70) return { status: "Out of range", color: "#ef4444" };
+    if (h < 40) return { status: "Dry", color: "#60a5fa" };
+    if (h <= 60) return { status: "Optimal", color: "#34d399" };
+    if (h <= 70) return { status: "Humid", color: "#f59e0b" };
+    return { status: "Out of range", color: "#ef4444" };
+  }
+  function classifyLight(lx: number) {
+    if (lx < 1) return { status: "Optimal", color: "#34d399" };
+    if (lx <= 10) return { status: "Dim", color: "#f59e0b" };
+    return { status: "Bright", color: "#fbbf24" };
+  }
+  function classifySound(db: number) {
+    if (db < 30) return { status: "Quiet", color: "#14b8a6" };
+    if (db <= 40) return { status: "Moderate", color: "#f59e0b" };
+    return { status: "Loud", color: "#ef4444" };
+  }
+
+  const tStat = classifyTemperature(latestTemp);
+  const hStat = classifyHumidity(latestHum);
+  const lStat = classifyLight(latestLux);
+  const sStat = classifySound(latestDba);
+
   return (
     <main className="flex-1 p-4 pb-8">
-      {" "}
-      {/* Regular header bar with date + calendar */}
-      <header className="-mx-4 px-4">
-        <div className="h-[60px] flex items-center justify-between">
-          <div className="leading-tight">
-            <div className="text-2xl font-semibold tracking-tight">
-              {dayName}
-            </div>
-            <div className="text-xs text-neutral-400">{dateRangeLabel}</div>
-          </div>
-          <Button
-            isIconOnly
-            variant="light"
-            radius="full"
-            aria-label="Open calendar"
-            onPress={() => router.push("/trends")}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="text-neutral-200"
-            >
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-          </Button>
-        </div>
-        {/* Week day selector */}
-        <div className="py-1 overflow-x-auto">
-          <div className="flex gap-2 w-max">
-            {weekDays.map((d) =>
-              d.isToday ? (
-                <button
-                  key={d.key}
-                  className="p-[2px] rounded-full gradient-sleep"
-                >
-                  <span className="w-10 h-10 rounded-full grid place-items-center text-[14px] font-medium bg-card text-neutral-100">
-                    {d.label}
-                  </span>
-                </button>
-              ) : (
-                <button key={d.key} className="rounded-full">
-                  <span className="w-10 h-10 rounded-full grid place-items-center text-[14px] font-medium bg-card text-neutral-300">
-                    {d.label}
-                  </span>
-                </button>
-              )
-            )}
-          </div>
-        </div>
-      </header>
+      <HeaderBar
+        dayName={dayName}
+        dateRangeLabel={dateRangeLabel}
+        weekDays={weekDays}
+        onCalendar={() => router.push("/trends")}
+      />
       {/* Sleep Score Hero Card */}
       <HCard className="mt-2 rounded-3xl border-white/10 bg-glass overflow-hidden">
-        {/* reduced top margin */}
         <CardBody className="relative p-5 h-[200px]">
-          {/* denser height */}
-          {/* subtle radial glow */}
           <div
             className="pointer-events-none absolute inset-0 opacity-40"
             style={{
@@ -409,6 +470,41 @@ export default function Dashboard() {
                 />
               </div>
             </div>
+          </div>
+        </CardBody>
+      </HCard>
+      {/* LIVE Smart Environment Tracking */}
+      <HCard className="mt-4 rounded-2xl bg-glass border-white/10">
+        <CardHeader className="pb-2 flex items-center justify-between">
+          <h3 className="text-lg font-medium">Smart Environment Tracking</h3>
+        </CardHeader>
+        <CardBody>
+          <div className="grid grid-cols-2 gap-3">
+            <TemperatureInsightCard
+              value={latestTemp}
+              data={env.temp}
+              status={tStat.status}
+            />
+            <HumidityInsightCard
+              value={latestHum}
+              data={env.hum}
+              status={hStat.status}
+            />
+          </div>
+        </CardBody>
+        <CardBody>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <LightInsightCard
+              value={latestLux}
+              data={env.lux}
+              status={lStat.status}
+            />
+            <SoundInsightCard
+              value={latestDba}
+              data={env.dba}
+              status={sStat.status}
+              unit="dBA"
+            />
           </div>
         </CardBody>
       </HCard>
@@ -568,82 +664,7 @@ export default function Dashboard() {
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <HCard>
-      <CardBody>{children}</CardBody>
-    </HCard>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="flex items-center justify-between mt-2 first:mt-0">
-      <span className="text-neutral-300">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
-  );
-}
-
-function SmallStat({
-  label,
-  value,
-}: {
-  label: string;
-  value: string | number;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 p-3 bg-white/5">
-      <div className="text-xs text-neutral-400">{label}</div>
-      <div className="text-xl font-semibold mt-1">{value}</div>
-    </div>
-  );
-}
-
-function EnvMini({
-  title,
-  value,
-}: {
-  title: string;
-  value: string;
-  accent?: "success" | "warning" | "danger";
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 p-3 bg-white/5">
-      <div className="text-xs text-neutral-400">{title}</div>
-      <div className="text-base font-semibold mt-1">{value}</div>
-    </div>
-  );
-}
-
-// Helpers for quick stats
-function StatCard({
-  title,
-  value,
-  sub,
-  sparklineData,
-}: {
-  title: string;
-  value: string;
-  sub?: string;
-  sparklineData?: number[];
-}) {
-  return (
-    <HCard className="bg-glass border-white/10">
-      <CardBody>
-        <div className="text-xs text-neutral-400">{title}</div>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <div className="text-xl font-semibold">{value}</div>
-          {sparklineData && sparklineData.length > 1 && (
-            <Sparkline data={sparklineData} />
-          )}
-        </div>
-        {sub && <div className="text-[10px] text-neutral-500 mt-1">{sub}</div>}
-      </CardBody>
-    </HCard>
-  );
-}
-
+// Keep local utility functions used only within this file
 function computeSleepDebt(logs: any[], target: number) {
   const last7 = logs.slice(0, 7);
   if (last7.length === 0) return "0h";
@@ -668,407 +689,4 @@ function computeConsistency(logs: any[]) {
     Math.min(100, Math.round(100 - (std / maxStd) * 100))
   );
   return consistency;
-}
-
-// UI bits for hero metrics
-function MetricBlock({
-  value,
-  label,
-  icon,
-}: {
-  value: string;
-  label: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <div className="text-2xl font-semibold text-neutral-100">{value}</div>
-      <div className="mt-1 flex items-center gap-2 text-[13px] text-neutral-300">
-        <span className="shrink-0">{icon}</span>
-        <span className="inline-flex items-center gap-1">
-          {label}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M9 18l6-6-6-6" />
-          </svg>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function BedIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 7v10" />
-      <path d="M21 16V9a2 2 0 0 0-2-2H7a4 4 0 0 0-4 4" />
-      <path d="M3 14h18" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 A7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
-
-// Sleep Stages Timeline Chart component
-function SleepStagesTimelineChart({
-  bedtime,
-  waketime,
-  durationHours,
-}: {
-  bedtime: string; // "HH:mm"
-  waketime: string; // "HH:mm"
-  durationHours: number;
-}) {
-  // Parse HH:mm into Date instances spanning midnight if needed
-  const parseHM = (hm: string, base: Date) => {
-    const [h, m] = hm.split(":").map((n) => parseInt(n, 10));
-    const d = new Date(base);
-    d.setHours(h, m, 0, 0);
-    return d;
-  };
-  const base = new Date();
-  let start = parseHM(bedtime, base);
-  let end = parseHM(waketime, base);
-  if (end <= start) end = new Date(end.getTime() + 24 * 60 * 60 * 1000);
-  const totalMs = end.getTime() - start.getTime();
-
-  // Generate smooth synthetic depth values across the night (0..1)
-  const points = useMemo(() => {
-    const N = 64; // resolution
-    const cycles = Math.max(3, Math.round(durationHours / 1.5)); // ~90m cycles
-    return Array.from({ length: N }, (_, i) => {
-      const t = i / (N - 1);
-      // deeper earlier, lighter later, more REM towards morning
-      const wave = 0.5 + 0.45 * Math.sin(2 * Math.PI * cycles * t);
-      const drift = -0.15 * t; // lighten towards morning
-      const v = Math.min(1, Math.max(0, wave + drift));
-      const ts = new Date(start.getTime() + t * totalMs);
-      return { t, v, ts };
-    });
-  }, [durationHours, totalMs, start]);
-
-  // Build bezier path
-  const width = 340;
-  const height = 200;
-  const pad = 16;
-  const innerW = width - pad * 2;
-  const innerH = height - pad * 2;
-  const stepX = innerW / (points.length - 1);
-  const pathD = useMemo(() => {
-    return points
-      .map((p, i, arr) => {
-        const x = pad + i * stepX;
-        const y = pad + innerH - p.v * innerH;
-        if (i === 0) return `M ${x} ${y}`;
-        const px = pad + (i - 1) * stepX;
-        const py = pad + innerH - arr[i - 1].v * innerH;
-        const cx1 = px + stepX / 2;
-        const cy1 = py;
-        const cx2 = x - stepX / 2;
-        const cy2 = y;
-        return ` C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x} ${y}`;
-      })
-      .join("");
-  }, [points, innerH, innerW]);
-  const areaD = `${pathD} L ${pad + (points.length - 1) * stepX} ${
-    pad + innerH
-  } L ${pad} ${pad + innerH} Z`;
-
-  // Gradient colors
-  const remColor = getComputedCssVar("--rem-accent", "#a78bfa");
-  const lightColor = getComputedCssVar("--light-accent", "#fbbf24");
-  const deepColor = getComputedCssVar("--sleep-gradient-start", "#6b46c1");
-
-  // Axis labels every 2h
-  const twoHourMs = 2 * 60 * 60 * 1000;
-  const tickDates: Date[] = [];
-  for (let t = start.getTime(); t <= end.getTime() + 1; t += twoHourMs) {
-    tickDates.push(new Date(t));
-  }
-
-  // Interaction state
-  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
-  const onMove = (
-    e: React.MouseEvent<SVGSVGElement> | React.TouchEvent<SVGSVGElement>
-  ) => {
-    const target = e.currentTarget as SVGSVGElement;
-    const rect = target.getBoundingClientRect();
-    const clientX = "touches" in e ? e.touches[0]?.clientX : (e as any).clientX;
-    if (clientX == null) return;
-    const x = clientX - rect.left;
-    const clamped = Math.max(pad, Math.min(width - pad, x));
-    const perc = (clamped - pad) / innerW;
-    const idx = Math.round(perc * (points.length - 1));
-    setHoverIdx(idx);
-  };
-  const stageFor = (v: number) => {
-    if (v < 0.2) return "Awake";
-    if (v < 0.5) return "Light";
-    if (v < 0.75) return "REM";
-    return "Deep";
-  };
-
-  const id = useId();
-
-  return (
-    <div className="relative">
-      <div className="mb-2 text-xs text-neutral-400">
-        {formatTime(start)} — {formatTime(end)}
-      </div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        width="100%"
-        height={height}
-        onMouseMove={onMove as any}
-        onTouchMove={onMove as any}
-        onMouseLeave={() => setHoverIdx(null)}
-      >
-        <defs>
-          <linearGradient
-            id={`stageLine-${id}`}
-            gradientUnits="userSpaceOnUse"
-            x1={pad}
-            y1={0}
-            x2={width - pad}
-            y2={0}
-          >
-            <stop offset="0%" stopColor={remColor} />
-            <stop offset="50%" stopColor={lightColor} />
-            <stop offset="100%" stopColor={deepColor} />
-          </linearGradient>
-          <linearGradient
-            id={`stageArea-${id}`}
-            gradientUnits="userSpaceOnUse"
-            x1={pad}
-            y1={0}
-            x2={width - pad}
-            y2={0}
-          >
-            <stop offset="0%" stopColor={hexWithAlpha(remColor, 0.2)} />
-            <stop offset="50%" stopColor={hexWithAlpha(lightColor, 0.2)} />
-            <stop offset="100%" stopColor={hexWithAlpha(deepColor, 0.2)} />
-          </linearGradient>
-        </defs>
-        {/* grid background */}
-        {Array.from({ length: 3 }).map((_, i) => {
-          const y = pad + (innerH / 2) * i;
-          return (
-            <line
-              key={i}
-              x1={pad}
-              x2={width - pad}
-              y1={y}
-              y2={y}
-              stroke="rgba(255,255,255,0.06)"
-              strokeWidth={1}
-            />
-          );
-        })}
-        {/* area */}
-        <path d={areaD} fill={`url(#stageArea-${id})`} />
-        {/* line */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke={`url(#stageLine-${id})`}
-          strokeWidth={3}
-          strokeLinecap="round"
-        />
-
-        {/* hover indicator */}
-        {hoverIdx != null &&
-          (() => {
-            const p = points[hoverIdx]!;
-            const x = pad + hoverIdx * stepX;
-            const y = pad + innerH - p.v * innerH;
-            return (
-              <g>
-                <line
-                  x1={x}
-                  x2={x}
-                  y1={pad}
-                  y2={height - pad}
-                  stroke="rgba(255,255,255,0.15)"
-                  strokeDasharray="4 4"
-                />
-                <circle cx={x} cy={y} r={5} fill="#fff" />
-              </g>
-            );
-          })()}
-      </svg>
-      {/* x-axis ticks every 2h */}
-      <div className="mt-1 flex justify-between text-[12px] text-neutral-400">
-        {tickDates.map((d, i) => (
-          <span key={i}>{formatTime(d)}</span>
-        ))}
-      </div>
-      {/* tooltip */}
-      {hoverIdx != null &&
-        (() => {
-          const p = points[hoverIdx]!;
-          const tms = start.getTime() + p.t * totalMs;
-          const tdate = new Date(tms);
-          return (
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-black/70 px-3 py-1 text-xs text-white">
-              {stageFor(p.v)} • {formatTime(tdate)}
-            </div>
-          );
-        })()}
-    </div>
-  );
-}
-
-function formatTime(d: Date) {
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-function getComputedCssVar(name: string, fallback: string) {
-  if (typeof window === "undefined") return fallback;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name);
-  return v?.trim() || fallback;
-}
-
-function hexWithAlpha(hex: string, alpha: number) {
-  // supports #rrggbb
-  if (!hex.startsWith("#") || (hex.length !== 7 && hex.length !== 4))
-    return hex;
-  const to255 = (h: string) => parseInt(h.length === 1 ? h + h : h, 16);
-  const r = to255(hex.length === 4 ? hex[1] : hex.slice(1, 3));
-  const g = to255(hex.length === 4 ? hex[2] : hex.slice(3, 5));
-  const b = to255(hex.length === 4 ? hex[3] : hex.slice(5, 7));
-  return `rgba(${r},${g},${b},${alpha})`;
-}
-
-// Sleep Stages Breakdown components
-function StagePill({
-  color,
-  label,
-  value,
-}: {
-  color: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center gap-2">
-        <span
-          className="inline-block h-2 w-2 rounded-full"
-          style={{ backgroundColor: color }}
-        />
-        <span className="text-[12px] text-neutral-400">{label}</span>
-      </div>
-      <div className="mt-1 text-[16px] font-semibold text-white">{value}</div>
-    </div>
-  );
-}
-
-function SleepStagesBreakdown({
-  awakeH,
-  remH,
-  lightH,
-  deepH,
-}: {
-  awakeH: number;
-  remH: number;
-  lightH: number;
-  deepH: number;
-}) {
-  const fmt = (hours: number) => {
-    const h = Math.max(0, Math.floor(hours));
-    const m = Math.round((hours - h) * 60);
-    return `${h}h ${String(m).padStart(2, "0")}m`;
-  };
-
-  return (
-    <div className="relative">
-      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-        <div className="grid grid-cols-2 gap-4 text-center">
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ backgroundColor: "#fb923c" }}
-              />
-              <span className="text-[12px] text-neutral-400">Awake</span>
-            </div>
-            <div className="text-[16px] font-semibold text-white">
-              {fmt(awakeH)}
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ backgroundColor: "#a78bfa" }}
-              />
-              <span className="text-[12px] text-neutral-400">REM</span>
-            </div>
-            <div className="text-[16px] font-semibold text-white">
-              {fmt(remH)}
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ backgroundColor: "#fbbf24" }}
-              />
-              <span className="text-[12px] text-neutral-400">Light</span>
-            </div>
-            <div className="text-[16px] font-semibold text-white">
-              {fmt(lightH)}
-            </div>
-          </div>
-          <div className="flex flex-col items-center gap-2">
-            <div className="flex items-center gap-2">
-              <span
-                className="inline-block h-2 w-2 rounded-full"
-                style={{ backgroundColor: "#6b46c1" }}
-              />
-              <span className="text-[12px] text-neutral-400">Deep</span>
-            </div>
-            <div className="text-[16px] font-semibold text-white">
-              {fmt(deepH)}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 }
