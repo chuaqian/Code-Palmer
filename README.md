@@ -1,10 +1,10 @@
-# 💤 SleepSync — Smart Sleep Optimization
+# 💤 Bluely— Smart Sleep Optimization
 
 Personal sleep insights, live environment tracking, and an ESP32-powered smart alarm — all in one PWA-friendly Next.js app.
 
 ## ✨ Overview
 
-SleepSync is a mobile-first web app that helps you improve your sleep using simple daily logs, AI-driven recommendations, and optional IoT integration. It includes:
+Bluely is a mobile-first web app that helps you improve your sleep using simple daily logs, AI-driven recommendations, and optional IoT integration. It includes:
 
 - 📊 A modern dashboard with sleep trends and scores
 - 🤖 AI recommendations (Gemini) with safe offline fallback
