@@ -41,46 +41,47 @@ export default function SoundInsightCard({
       className: "bg-rose-500/20 text-rose-300 border-rose-500/30",
     };
   }, [status]);
-
   return (
     <HCard
-      className="rounded-2xl border-white/10"
-      style={{ background: "#13141A", height: 200 }}
+      className="rounded-2xl border-white/10 overflow-hidden"
+      style={{ background: "#13141A", height: 180 }}
     >
-      <CardBody className="h-full p-5">
-        <div className="flex items-center justify-between">
+      <CardBody className="h-full p-4 flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 text-sm text-neutral-300">
             <WaveIcon color="#60A5FA" />
             <span>Ambient noise</span>
           </div>
         </div>
-        <div className="mt-2 flex items-end justify-between">
-          <div className="flex items-baseline gap-4">
-            <div className="text-white font-bold" style={{ fontSize: 36 }}>
+        <div className="flex items-end justify-between mb-3">
+          <div className="flex items-baseline gap-3">
+            <div className="text-white font-bold" style={{ fontSize: 28 }}>
               {Math.round(value * 10) / 10}
-              <span className="ml-1 text-neutral-400 text-base">{unit}</span>
+              <span className="ml-1 text-neutral-400 text-sm">{unit}</span>
             </div>
-            <div className="text-sm" style={{ color: "#9CA3AF" }}>
+            <div className="text-xs" style={{ color: "#9CA3AF" }}>
               Median {median}
               {unit}
             </div>
           </div>
         </div>
         {/* Vertical bar chart */}
-        <div className="mt-3 h-[72px] w-full flex items-end gap-[3px]">
-          {data.slice(-48).map((v, i) => {
-            const h = Math.min(72, Math.max(4, ((v - 20) / 40) * 72));
-            return (
-              <div
-                key={i}
-                title={`${v.toFixed(1)}${unit}`}
-                className="rounded-sm bg-[#FB923C]/80 hover:bg-[#FB923C] transition-colors"
-                style={{ height: h, width: 6 }}
-              />
-            );
-          })}
+        <div className="flex-1 flex items-end justify-center">
+          <div className="h-[55px] w-full flex items-end gap-[2px] overflow-hidden">
+            {data.slice(-32).map((v, i) => {
+              const h = Math.min(55, Math.max(3, ((v - 20) / 40) * 55));
+              return (
+                <div
+                  key={i}
+                  title={`${v.toFixed(1)}${unit}`}
+                  className="rounded-sm bg-[#FB923C]/80 hover:bg-[#FB923C] transition-colors flex flex-col items-center flex-1"
+                  style={{ height: h }}
+                />
+              );
+            })}
+          </div>
         </div>
-        <div className="mt-2 flex justify-between text-[11px] text-neutral-500">
+        <div className="flex justify-between text-[10px] text-neutral-500 mt-2">
           <span>11:59 PM</span>
           <span>7:15 AM</span>
         </div>

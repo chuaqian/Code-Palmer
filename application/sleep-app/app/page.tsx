@@ -38,12 +38,27 @@ export default function Dashboard() {
   const [tips, setTips] = useState<string[] | null>(null);
   const [tipsLoading, setTipsLoading] = useState(false);
   const [tipsError, setTipsError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Loading simulation for smooth app experience
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoading(false), 500);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     seedMockIfEmpty();
   }, [seedMockIfEmpty]);
 
-  // Header date labels
+  // Redirect to onboarding if not completed
+  useEffect(() => {
+    if (!isLoading && !onboardingComplete) {
+      router.push('/onboarding');
+      return;
+    }
+  }, [onboardingComplete, router, isLoading]);
+
+  // Header date labels - moved before conditional return
   const today = useMemo(() => new Date(), []);
   const dayName = useMemo(
     () => today.toLocaleDateString(undefined, { weekday: "long" }),
@@ -84,24 +99,6 @@ export default function Dashboard() {
     () => (latest ? scoreForLog(latest, profile.targetSleepHours) : 0),
     [latest, profile.targetSleepHours]
   );
-
-  // Progress ring config for hero card (denser)
-  const heroRing = useMemo(() => {
-    const size = 140; // smaller ring for denser layout
-    const stroke = 12; // thinner stroke
-    const r = (size - stroke) / 2;
-    const c = 2 * Math.PI * r;
-    const pct = Math.max(0, Math.min(100, Math.round(latestScore)));
-    const offset = c * (1 - pct / 100);
-    const cx = size / 2;
-    const cy = size / 2;
-    return { size, stroke, r, c, pct, offset, cx, cy };
-  }, [latestScore]);
-  const [dashOffset, setDashOffset] = useState(heroRing.c);
-  useEffect(() => {
-    // animate to target on score changes
-    requestAnimationFrame(() => setDashOffset(heroRing.offset));
-  }, [heroRing.offset]);
 
   // Helpers for hero metrics
   const fmtHM = (hours: number) => {
@@ -149,25 +146,6 @@ export default function Dashboard() {
         }
       : null;
   }, [profile.typicalBedtime, settings.reminderMinutesBeforeBedtime]);
-
-  async function fetchRecommendations() {
-    try {
-      setTipsLoading(true);
-      setTipsError(null);
-      const res = await fetch("/api/recommendations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ profile, logs: logs.slice(0, 7) }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: { tips: string[] } = await res.json();
-      setTips(data.tips);
-    } catch (e: any) {
-      setTipsError(e?.message || "Failed to get recommendations");
-    } finally {
-      setTipsLoading(false);
-    }
-  }
 
   // Weekly trend data
   const trend = useMemo(() => {
@@ -232,6 +210,53 @@ export default function Dashboard() {
     }
     return streak;
   }, [logs]);
+
+  // Removed early return for loading state to keep hook order stable
+
+  async function fetchRecommendations() {
+    try {
+      setTipsLoading(true);
+      setTipsError(null);
+      
+      // Add timeout for better UX
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const res = await fetch("/api/recommendations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile, logs: logs.slice(0, 7) }),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!res.ok) {
+        throw new Error(`Failed to get recommendations (${res.status})`);
+      }
+      
+      const data: { tips: string[] } = await res.json();
+      
+      if (!data.tips || !Array.isArray(data.tips)) {
+        throw new Error('Invalid response format');
+      }
+      
+      setTips(data.tips);
+      
+      // Success feedback (optional: could add a toast notification)
+      console.log(`✅ Generated ${data.tips.length} personalized recommendations`);
+      
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        setTipsError("Request timed out. Please try again.");
+      } else {
+        setTipsError(e?.message || "Failed to get recommendations. Please check your connection.");
+      }
+      console.error('Recommendations error:', e);
+    } finally {
+      setTipsLoading(false);
+    }
+  }
 
   // ======== LIVE ENVIRONMENT (mock stream until IoT is connected) ========
   type EnvState = {
@@ -360,7 +385,20 @@ export default function Dashboard() {
   const lStat = classifyLight(latestLux);
   const sStat = classifySound(latestDba);
 
-  return (
+  // NOTE: Render loading via conditional JSX instead of early-return to keep hooks order identical across renders
+  return isLoading ? (
+    <main className="flex-1 p-4 pb-8">
+      <div className="animate-pulse space-y-4">
+        <div className="h-8 bg-white/10 rounded w-1/3"></div>
+        <div className="h-48 bg-white/10 rounded-3xl"></div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="h-32 bg-white/10 rounded-2xl"></div>
+          <div className="h-32 bg-white/10 rounded-2xl"></div>
+        </div>
+        <div className="h-64 bg-white/10 rounded-2xl"></div>
+      </div>
+    </main>
+  ) : (
     <main className="flex-1 p-4 pb-8">
       <HeaderBar
         dayName={dayName}
@@ -370,131 +408,169 @@ export default function Dashboard() {
         currentStreak={currentStreak}
       />
       {/* Sleep Score Hero Card */}
-      <HCard className="mt-2 rounded-3xl border-white/10 bg-glass overflow-hidden">
-        <CardBody className="relative p-5 h-[200px]">
+      <HCard className="mt-2 rounded-3xl border-white/10 bg-gradient-to-br from-black/40 via-purple-950/20 to-black/40 backdrop-blur-xl overflow-hidden">
+        <CardBody className="relative p-6 h-[240px]">
           <div
-            className="pointer-events-none absolute inset-0 opacity-40"
+            className="pointer-events-none absolute inset-0 opacity-30"
             style={{
               background:
-                "radial-gradient(ellipse at top, rgba(167,139,250,0.15), transparent 55%)",
+                "radial-gradient(ellipse 80% 60% at 30% 40%, rgba(147,51,234,0.2), transparent), radial-gradient(ellipse 60% 80% at 70% 60%, rgba(167,139,250,0.15), transparent)",
             }}
           />
 
-          <div className="relative h-full flex items-center gap-5">
-            {/* Central progress ring */}
-            <div
-              className="relative grid place-items-center"
-              style={{ width: heroRing.size, height: heroRing.size }}
-            >
-              <svg
-                width={heroRing.size}
-                height={heroRing.size}
-                viewBox={`0 0 ${heroRing.size} ${heroRing.size}`}
+          <div className="relative h-full flex items-center justify-between">
+            {/* Left side: Sleep score ring with enhanced design */}
+            <div className="flex items-center gap-6">
+              <div
+                className="relative grid place-items-center"
+                style={{ width: 180, height: 180 }}
               >
-                <defs>
-                  {/* gradient aligned from arc start to arc end to brighten at the tip */}
-                  <linearGradient
-                    id="scoreGrad"
-                    gradientUnits="userSpaceOnUse"
-                    x1="0%"
-                    y1="0%"
-                    x2="100%"
-                    y2="0%"
-                  >
-                    {/* subtle gradient stops for the hero ring */}
-                    <stop offset="0%" stopColor="#6B46C1" stopOpacity="0.95" />
-                    <stop offset="60%" stopColor="#9333EA" stopOpacity="0.98" />
-                    <stop offset="100%" stopColor="#A78BFA" stopOpacity="0.9" />
-                  </linearGradient>
-                  {/* subtle end glow */}
-                  <radialGradient id="endGlow" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-                    <stop offset="70%" stopColor="#ffffff" stopOpacity="0.35" />
-                    <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
-                  </radialGradient>
-                </defs>
-                {/* background ring */}
-                <circle
-                  cx={heroRing.size / 2}
-                  cy={heroRing.size / 2}
-                  r={heroRing.r}
-                  stroke="rgba(255,255,255,0.12)"
-                  strokeWidth={heroRing.stroke}
-                  fill="none"
-                />
-                {/* progress ring */}
-                <g
-                  transform={`rotate(-90 ${heroRing.size / 2} ${
-                    heroRing.size / 2
-                  })`}
+                <svg
+                  width={180}
+                  height={180}
+                  viewBox="0 0 180 180"
+                  className="transform hover:scale-105 transition-transform duration-500"
                 >
-                  <circle
-                    cx={heroRing.size / 2}
-                    cy={heroRing.size / 2}
-                    r={heroRing.r}
-                    stroke="url(#scoreGrad)"
-                    strokeWidth={heroRing.stroke}
-                    strokeLinecap="round"
-                    strokeDasharray={heroRing.c}
-                    strokeDashoffset={dashOffset}
-                    fill="none"
-                    style={{ transition: "stroke-dashoffset 2s ease-out" }}
-                  />
-                </g>
-              </svg>
-              {/* center text */}
-              <div className="absolute inset-0 grid place-items-center">
-                <div className="text-center">
-                  <div className="text-[36px] leading-none font-bold">
-                    {/* slightly smaller for density */}
-                    {heroRing.pct}%
-                  </div>
-                  <button className="mt-1.5 text-[13px] text-neutral-300 hover:text-neutral-100 transition-colors inline-flex items-center gap-1">
-                    Quality
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                  <defs>
+                    <linearGradient
+                      id="scoreGradient"
+                      gradientUnits="userSpaceOnUse"
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="100%"
                     >
-                      <path d="M9 18l6-6-6-6" />
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity="1" />
+                      <stop offset="50%" stopColor="#8b5cf6" stopOpacity="1" />
+                      <stop offset="100%" stopColor="#a855f7" stopOpacity="1" />
+                    </linearGradient>
+                    <filter id="glow">
+                      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                      <feMerge> 
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  {/* Background circle */}
+                  <circle
+                    cx="90"
+                    cy="90"
+                    r="75"
+                    stroke="rgba(255,255,255,0.1)"
+                    strokeWidth="14"
+                    fill="none"
+                  />
+                  {/* Progress circle */}
+                  <circle
+                    cx="90"
+                    cy="90"
+                    r="75"
+                    stroke="url(#scoreGradient)"
+                    strokeWidth="14"
+                    strokeLinecap="round"
+                    fill="none"
+                    filter="url(#glow)"
+                    strokeDasharray="471.24"
+                    strokeDashoffset={471.24 * (1 - latestScore / 100)}
+                    transform="rotate(-90 90 90)"
+                    style={{ 
+                      transition: "stroke-dashoffset 2.5s cubic-bezier(0.4, 0, 0.2, 1)",
+                    }}
+                  />
+                </svg>
+                {/* Center content with enhanced typography */}
+                <div className="absolute inset-0 grid place-items-center">
+                  <div className="text-center">
+                    <div className="text-5xl font-bold bg-gradient-to-br from-white via-purple-100 to-purple-200 bg-clip-text text-transparent leading-none">
+                      {Math.round(latestScore)}
+                    </div>
+                    <div className="text-lg font-medium text-purple-200 mt-1">
+                      Quality Score
+                    </div>
+                    <div className="text-xs text-neutral-400 mt-1">
+                      Last night
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sleep metrics with better spacing */}
+              <div className="flex flex-col gap-4">
+                <div className="space-y-1">
+                  <div className="text-2xl font-semibold text-white">
+                    {fmtHM(asleepHours)}
+                  </div>
+                  <div className="text-sm text-neutral-300 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M12 2a3 3 0 0 0-3 3v1H8a1 1 0 0 0 0 2h1v1a3 3 0 1 0 6 0V8h1a1 1 0 0 0 0-2h-1V5a3 3 0 0 0-3-3z"/>
+                      <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
                     </svg>
-                  </button>
+                    Sleep Duration
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-xl font-medium text-neutral-200">
+                    {fmtHM(inBedHours)}
+                  </div>
+                  <div className="text-sm text-neutral-400 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M3 7v10" />
+                      <path d="M21 16V9a2 2 0 0 0-2-2H7a4 4 0 0 0-4 4" />
+                      <path d="M3 14h18" />
+                    </svg>
+                    Time in Bed
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Right side metrics */}
-            <div className="flex-1 flex justify-center">
-              <div className="flex flex-col gap-3 w-full max-w-[280px]">
-                {/* a bit more width for metrics */}
-                <MetricBlock
-                  value={fmtHM(inBedHours)}
-                  label="In bed"
-                  icon={<BedIcon />}
-                />
-                <MetricBlock
-                  value={fmtHM(asleepHours)}
-                  label="Asleep"
-                  icon={<MoonIcon />}
-                />
+            {/* Right side: Quick stats */}
+            <div className="flex flex-col gap-3 text-right">
+              <div className="bg-white/5 rounded-xl p-3 backdrop-blur-sm border border-white/10">
+                <div className="text-lg font-semibold text-green-400">
+                  {goalPercent}%
+                </div>
+                <div className="text-xs text-neutral-400">
+                  Sleep Goal
+                </div>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 backdrop-blur-sm border border-white/10">
+                <div className="text-lg font-semibold text-blue-400">
+                  {week.avgScore || 0}
+                </div>
+                <div className="text-xs text-neutral-400">
+                  Week Avg
+                </div>
               </div>
             </div>
           </div>
         </CardBody>
       </HCard>
       {/* LIVE Smart Environment Tracking */}
-      <HCard className="mt-4 rounded-2xl bg-glass border-white/10">
-        <CardHeader className="pb-2 flex items-center justify-between">
-          <h3 className="text-lg font-medium">Smart Environment Tracking</h3>
+      <HCard className="mt-4 rounded-2xl bg-gradient-to-br from-slate-950/80 via-purple-950/20 to-slate-950/80 border-white/10 backdrop-blur-xl">
+        <CardHeader className="pb-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-medium bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">
+              Smart Environment — LIVE
+            </h3>
+            <div className="flex items-center gap-2">
+              <div 
+                className={`w-2 h-2 rounded-full animate-pulse ${
+                  latestTemp > 0 ? 'bg-green-400' : 'bg-orange-400'
+                }`}
+              />
+              <span className="text-xs text-neutral-400">
+                {latestTemp > 0 ? 'Connected' : 'Simulated'}
+              </span>
+            </div>
+          </div>
+          <div className="text-xs text-neutral-500">
+            {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </div>
         </CardHeader>
-        <CardBody>
-          <div className="grid grid-cols-2 gap-3">
+        <CardBody className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
             <TemperatureInsightCard
               value={latestTemp}
               data={env.temp}
@@ -506,9 +582,7 @@ export default function Dashboard() {
               status={hStat.status}
             />
           </div>
-        </CardBody>
-        <CardBody>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="grid grid-cols-2 gap-4">
             <LightInsightCard
               value={latestLux}
               data={env.lux}
@@ -523,20 +597,84 @@ export default function Dashboard() {
           </div>
         </CardBody>
       </HCard>
-      {/* Quick Stats Grid (1x2) */}
-      <section className="mt-6 grid grid-cols-2 gap-3">
+      {/* Advanced Sleep Analytics Grid */}
+      <section className="mt-6 grid grid-cols-2 gap-4">
         <StatCard
-          title="Avg Sleep"
-          value={fmtHM(inBedHours)}
-          sub={week.avgScore ? `Score ${week.avgScore}` : undefined}
-          sparklineData={trend.durations}
+          title="Sleep Debt"
+          value={computeSleepDebt(logs, profile.targetSleepHours)}
+          sub={`Target: ${fmtHM(profile.targetSleepHours)}`}
+          sparklineData={trend.durations.map((d, i) => {
+            const debt = profile.targetSleepHours - d;
+            return debt;
+          })}
         />
         <StatCard
           title="Consistency"
           value={`${computeConsistency(logs)}%`}
-          sub="variance"
+          sub="Weekly variance"
+          sparklineData={trend.durations}
         />
       </section>
+      
+      {/* Weekly Performance Overview */}
+      <HCard className="mt-4 rounded-2xl bg-gradient-to-br from-blue-950/20 via-purple-950/10 to-indigo-950/20 border-white/10">
+        <CardHeader className="pb-3">
+          <h3 className="text-lg font-medium">Weekly Performance</h3>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="text-center p-3 rounded-lg bg-white/5">
+              <div className="text-2xl font-bold text-green-400">
+                {week.avgScore || 0}
+              </div>
+              <div className="text-xs text-neutral-400 mt-1">Avg Score</div>
+            </div>
+            <div className="text-center p-3 rounded-lg bg-white/5">
+              <div className="text-2xl font-bold text-blue-400">
+                {fmtHM(week.avgDuration || 0)}
+              </div>
+              <div className="text-xs text-neutral-400 mt-1">Avg Sleep</div>
+            </div>
+            <div className="text-center p-3 rounded-lg bg-white/5">
+              <div className="text-2xl font-bold text-purple-400">
+                {Math.round((week.avgQuality || 0) * 10) / 10}
+              </div>
+              <div className="text-xs text-neutral-400 mt-1">Avg Quality</div>
+            </div>
+          </div>
+          
+          {/* Weekly trend visualization */}
+          <div className="mt-4">
+            <div className="flex justify-between text-xs text-neutral-400 mb-2">
+              <span>Daily Sleep Duration (This Week)</span>
+              <span>Target: {fmtHM(profile.targetSleepHours)}</span>
+            </div>
+            <div className="flex items-end gap-1 h-16">
+              {weekDays.map((day, i) => {
+                const duration = trend.durations[i] || 0;
+                const height = Math.max(10, (duration / (profile.targetSleepHours + 2)) * 100);
+                const isAboveTarget = duration >= profile.targetSleepHours;
+                
+                return (
+                  <div key={day.key} className="flex-1 flex flex-col items-center gap-1">
+                    <div 
+                      className={`w-full rounded-t transition-all duration-500 ${
+                        isAboveTarget 
+                          ? 'bg-gradient-to-t from-green-600 to-green-400' 
+                          : 'bg-gradient-to-t from-orange-600 to-orange-400'
+                      } ${day.isToday ? 'ring-2 ring-white/50' : ''}`}
+                      style={{ height: `${height}%` }}
+                    />
+                    <div className={`text-[10px] ${day.isToday ? 'text-white font-medium' : 'text-neutral-400'}`}>
+                      {day.label}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </CardBody>
+      </HCard>
       {/* Sleep Stages Timeline Chart */}
       <HCard className="mt-3 rounded-2xl bg-glass border-white/10">
         <CardHeader className="pb-2">
@@ -584,41 +722,99 @@ export default function Dashboard() {
           </CardBody>
         </HCard>
       )}
-      {/* Insights Carousel */}
-      <HCard className="mt-4 bg-glass border-white/10">
-        <CardHeader className="pb-2">
-          <h3 className="text-lg font-medium">AI Insights</h3>
+      {/* Enhanced AI Insights */}
+      <HCard className="mt-4 bg-gradient-to-br from-violet-950/30 via-purple-950/20 to-indigo-950/30 border-white/10 backdrop-blur-xl">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">
+                AI Sleep Insights
+              </h3>
+            </div>
+            {tips && tips.length > 0 && (
+              <div className="text-xs text-neutral-400">
+                {tips.length} recommendation{tips.length !== 1 ? 's' : ''}
+              </div>
+            )}
+          </div>
         </CardHeader>
-        <CardBody>
-          <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2">
-            {(tips && tips.length
-              ? tips
-              : ["Tap Get Recommendations to generate insights."]
-            ).map((t, i) => (
+        <CardBody className="space-y-4">
+          {tipsError && (
+            <div className="p-3 rounded-lg bg-red-950/30 border border-red-500/20">
+              <div className="text-sm text-red-200 flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                {tipsError}
+              </div>
+            </div>
+          )}
+          
+          <div className="space-y-3">
+            {(tips && tips.length > 0 ? tips : [
+              "🌙 Try our AI-powered sleep recommendations",
+              "📊 Get personalized insights based on your sleep patterns",
+              "🎯 Discover ways to improve your sleep quality"
+            ]).map((tip, i) => (
               <div
                 key={i}
-                className="min-w-[80%] snap-center rounded-xl border border-white/10 bg-white/5 p-4"
+                className="group p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all duration-300 cursor-pointer"
               >
-                <div className="flex items-center gap-2 text-sm text-neutral-300">
-                  <span className="inline-block h-2 w-2 rounded-full bg-[#a78bfa]" />{" "}
-                  Insight
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <div className="w-2 h-2 rounded-full bg-white"></div>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm text-neutral-100 leading-relaxed">
+                      {tip}
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-xs text-purple-300 font-medium">
+                        AI Insight
+                      </span>
+                      <div className="w-1 h-1 rounded-full bg-neutral-500"></div>
+                      <span className="text-xs text-neutral-400">
+                        Personalized
+                      </span>
+                    </div>
+                  </div>
+                  <svg 
+                    className="w-4 h-4 text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </div>
-                <p className="mt-2 text-neutral-100 text-sm">{t}</p>
-                <Button size="sm" variant="flat" className="mt-3">
-                  Learn more
-                </Button>
               </div>
             ))}
           </div>
-          <Button
-            color="primary"
-            className="mt-3"
-            fullWidth
-            onPress={fetchRecommendations}
-            isDisabled={tipsLoading}
-          >
-            {tipsLoading ? "Generating…" : "Get Recommendations"}
-          </Button>
+          
+          <div className="pt-2">
+            <Button
+              color="secondary"
+              className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 font-medium"
+              onPress={fetchRecommendations}
+              isDisabled={tipsLoading}
+              startContent={
+                tipsLoading ? (
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                )
+              }
+            >
+              {tipsLoading ? "Generating Insights..." : "Get AI Recommendations"}
+            </Button>
+          </div>
         </CardBody>
       </HCard>
       {/* Breathing disturbances reflection (Yesterday) */}
@@ -627,40 +823,145 @@ export default function Dashboard() {
         <BreathingDisturbancesChart disturbances={getSeptemberDisturbances()} />
       </div>
       </HCard>
-      {/* Tonight's Conditions Preview */}
-      <HCard className="mt-4 bg-glass border-white/10">
-        <CardHeader className="pb-2">
-          <h3 className="text-lg font-medium">Tonight</h3>
+      {/* Tonight's Conditions with Smart Alarm */}
+      <HCard className="mt-4 bg-gradient-to-br from-emerald-950/20 via-teal-950/10 to-cyan-950/20 border-white/10 backdrop-blur-xl">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-medium bg-gradient-to-r from-white to-emerald-200 bg-clip-text text-transparent">
+                Tonight's Setup
+              </h3>
+            </div>
+            <div className="text-xs text-neutral-400">
+              Ready for sleep
+            </div>
+          </div>
         </CardHeader>
-        <Divider />
-        <CardBody>
-          <div className="text-sm text-neutral-300">Optimal bedtime</div>
-          <div className="text-2xl font-semibold mt-1">
-            {profile.typicalBedtime}
+        <CardBody className="space-y-4">
+          {/* Bedtime and forecast */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+              <div className="text-sm text-neutral-300 mb-1">Optimal bedtime</div>
+              <div className="text-2xl font-bold text-emerald-400">
+                {profile.typicalBedtime}
+              </div>
+              <div className="text-xs text-neutral-400 mt-1">
+                Based on your schedule
+              </div>
+            </div>
+            <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+              <div className="text-sm text-neutral-300 mb-1">Expected quality</div>
+              <div className="text-2xl font-bold text-blue-400">
+                {Math.round((week.avgQuality || 7) * 10) / 10}/10
+              </div>
+              <div className="text-xs text-neutral-400 mt-1">
+                Weather: Clear
+              </div>
+            </div>
           </div>
-          <div className="text-xs text-neutral-500 mt-2">
-            Expected quality: {week.avgQuality || 0}/10 • Weather: clear
+
+          {/* Smart alarm controls */}
+          <div className="p-4 rounded-lg bg-gradient-to-r from-emerald-950/30 to-teal-950/30 border border-emerald-500/20">
+            <div className="flex items-center gap-3 mb-3">
+              <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+              <span className="font-medium text-emerald-100">Smart Sunrise Alarm</span>
+            </div>
+            <div className="text-sm text-neutral-300 mb-4">
+              Wake up naturally with gradual light simulation and gentle sounds
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Button 
+                color="success" 
+                className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700"
+                onPress={() => router.push("/smart-alarm")}
+                startContent={
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707" />
+                  </svg>
+                }
+              >
+                Set Alarm
+              </Button>
+              <Button 
+                variant="flat" 
+                className="border-emerald-500/20 hover:bg-emerald-500/10"
+                onPress={async () => {
+                  try {
+                    await esp32Controller.triggerSunrise();
+                    // Could show a toast notification here
+                  } catch (error) {
+                    console.error('Failed to test sunrise:', error);
+                  }
+                }}
+                startContent={
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3l14 9-14 9V3z" />
+                  </svg>
+                }
+              >
+                Test Sunrise
+              </Button>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <Button color="success" onPress={() => router.push("/smartAlarm")}>
-              Set Smart Alarm
+
+          {/* Quick settings */}
+          <div className="grid grid-cols-2 gap-3">
+            <Button 
+              variant="flat" 
+              className="border-white/10 hover:bg-white/10"
+              onPress={() => router.push("/settings")}
+              startContent={
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-5 5v-5zM4 19h5c.552 0 1-.448 1-1s-.448-1-1-1H4c-.552 0-1 .448-1 1s.448 1 1 1zm0-6h8c.552 0 1-.448 1-1s-.448-1-1-1H4c-.552 0-1 .448-1 1s.448 1 1 1zm0-6h8c.552 0 1-.448 1-1s-.448-1-1-1H4c-.552 0-1 .448-1 1s.448 1 1 1z" />
+                </svg>
+              }
+            >
+              Sleep Settings
             </Button>
-            <Button variant="flat" onPress={() => router.push("/settings")}>
-              Reminder Settings
+            <Button 
+              variant="flat" 
+              className="border-white/10 hover:bg-white/10"
+              onPress={async () => {
+                try {
+                  await esp32Controller.nightLight();
+                  // Could show a toast notification here
+                } catch (error) {
+                  console.error('Failed to set night light:', error);
+                }
+              }}
+              startContent={
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              }
+            >
+              Night Light
             </Button>
           </div>
         </CardBody>
       </HCard>
-      {/* FAB Quick Entry */}
-      <div className="fixed right-5 bottom-20">
+      {/* Enhanced FAB with pulse animation and better accessibility */}
+      <div className="fixed right-5 bottom-20 z-50">
         <Button
           isIconOnly
           color="secondary"
-          className="rounded-full shadow-lg animate-[pulse_2s_infinite]"
+          size="lg"
+          className="rounded-full shadow-2xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 transform hover:scale-110 transition-all duration-300"
           onPress={() => router.push("/log")}
+          aria-label="Log tonight's sleep"
         >
-          +
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
         </Button>
+        <div className="absolute inset-0 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 animate-ping opacity-20 -z-10" />
       </div>
     </main>
   );

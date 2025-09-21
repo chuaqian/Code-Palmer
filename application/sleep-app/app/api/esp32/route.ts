@@ -72,7 +72,13 @@ export async function GET(request: NextRequest) {
                 const encoder = new TextEncoder();
 
                 const write = (line: string) => {
-                    controller.enqueue(encoder.encode(line));
+                    try {
+                        if (!controller.desiredSize || controller.desiredSize > 0) {
+                            controller.enqueue(encoder.encode(line));
+                        }
+                    } catch (error) {
+                        console.warn('Controller write failed:', error);
+                    }
                 };
                 const send = (data: string) => write(`data: ${data}\n\n`);
                 const comment = (text: string) => write(`: ${text}\n\n`);
@@ -100,23 +106,47 @@ export async function GET(request: NextRequest) {
                 ws.on('close', (code: any, reason: any) => {
                     const reasonText = typeof reason === 'string' ? reason : (reason && reason.toString ? reason.toString() : '');
                     send(JSON.stringify({ type: 'ws_close', code, reason: reasonText, timestamp: new Date().toISOString() }));
-                    controller.close();
+                    try {
+                        controller.close();
+                    } catch (error) {
+                        console.warn('Controller close failed:', error);
+                    }
                 });
 
                 ws.on('error', (err: any) => {
                     const message = err && err.message ? err.message : 'unknown error';
                     send(JSON.stringify({ type: 'ws_error', message, timestamp: new Date().toISOString() }));
                     // Close the stream on error to let client retry
-                    controller.close();
+                    try {
+                        controller.close();
+                    } catch (error) {
+                        console.warn('Controller close failed:', error);
+                    }
                 });
 
                 // Keep-alive comments so proxies don't close idle connections
-                const keepAlive = setInterval(() => comment('ping'), 15000);
+                const keepAlive = setInterval(() => {
+                    try {
+                        comment('ping');
+                    } catch (error) {
+                        console.warn('Keep-alive failed:', error);
+                        clearInterval(keepAlive);
+                    }
+                }, 15000);
 
                 // Abort handling when client disconnects
                 const abort = () => {
                     clearInterval(keepAlive);
-                    try { ws.close(); } catch {}
+                    try { 
+                        ws.close(); 
+                    } catch (error) {
+                        console.warn('WebSocket close failed:', error);
+                    }
+                    try {
+                        controller.close();
+                    } catch (error) {
+                        console.warn('Controller close failed:', error);
+                    }
                 };
 
                 // NextRequest exposes an AbortSignal for client disconnects

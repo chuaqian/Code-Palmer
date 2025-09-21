@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@heroicons/react": "^2.1.5",
     "@heroui/react": "^2.8.4",
     "@hookform/resolvers": "^3.10.0",
     "class-variance-authority": "^0.7.1",

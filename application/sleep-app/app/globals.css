@@ -249,3 +249,29 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom scrollbar for modal content */
+.custom-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Smooth scroll animations */
+@keyframes numberScroll {
+  from {
+    transform: translateY(20px);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.number-scroll-animation {
+  animation: numberScroll 0.3s ease-out;
+}

@@ -34,3 +34,38 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+---
+
+## Smart Alarm (ESP32) Page
+
+- Route: `/smart-alarm`
+- Purpose: Configure bedtime/wake time and demo ESP32 features (sunrise, sunset, buzzer, night light).
+
+### ESP32 Local Bridge
+
+This app sends commands to a local bridge process which talks to the ESP32 over USB serial and exposes:
+
+- HTTP: `http://127.0.0.1:3001/command`
+- WebSocket: `ws://127.0.0.1:3002`
+
+The Next.js API at `app/api/esp32/route.ts` forwards app commands to `http://127.0.0.1:3001/command` and streams live messages via SSE from the WebSocket.
+
+To start the bridge:
+
+```powershell
+cd ..\sleep-app-backend\app
+npm install
+node server.js
+```
+
+Then, in another terminal, start the app:
+
+```powershell
+cd ..\sleep-app
+npm run dev
+```
+
+Visit `http://localhost:3000/smart-alarm`.
+
+If your firmware expects different command names, adjust `src/lib/esp32.ts`.
