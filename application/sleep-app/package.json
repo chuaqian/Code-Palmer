@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "@heroicons/react": "^2.1.5",
     "@heroui/react": "^2.8.4",
     "@hookform/resolvers": "^3.10.0",

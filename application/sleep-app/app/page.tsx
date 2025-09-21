@@ -498,7 +498,7 @@ export default function Dashboard() {
               {/* Sleep metrics with better spacing */}
               <div className="flex flex-col gap-4">
                 <div className="space-y-1">
-                  <div className="text-2xl font-semibold text-white">
+                  <div className="text-xl font-medium text-neutral-200">
                     {fmtHM(asleepHours)}
                   </div>
                   <div className="text-sm text-neutral-300 flex items-center gap-2">

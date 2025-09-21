@@ -69,3 +69,27 @@ npm run dev
 Visit `http://localhost:3000/smart-alarm`.
 
 If your firmware expects different command names, adjust `src/lib/esp32.ts`.
+
+---
+
+## AI Sleep Insights (Gemini)
+
+The route `POST /api/recommendations` uses Google Gemini when an API key is provided, with a safe heuristic fallback otherwise.
+
+Add an environment variable (e.g., in `.env.local` at the project root next to `package.json`):
+
+```env
+GOOGLE_GENERATIVE_AI_API_KEY=your_key_here
+```
+
+Then restart the dev server:
+
+```powershell
+npm run dev
+```
+
+Run unit tests:
+
+```powershell
+npm test
+```
